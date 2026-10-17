@@ -233,16 +233,16 @@ public struct EditorView: View {
             // Left: New Capture Menu + Dimensions Badge + Live Eyedropper + Loupe Toggle
             HStack(spacing: 6) {
                 Menu {
-                    Button("Area Capture (⌘⇧2)") {
+                    Button("Area Capture (⌃⇧2)") {
                         NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerArea"), object: nil)
                     }
-                    Button("Window Capture (⌘⇧W)") {
+                    Button("Window Capture (⌃⇧W)") {
                         NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerWindow"), object: nil)
                     }
-                    Button("Fullscreen Capture (⌘⇧1)") {
+                    Button("Fullscreen Capture (⌃⇧1)") {
                         NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerFullscreen"), object: nil)
                     }
-                    Button("Scrolling Capture (⌘⇧3)") {
+                    Button("Scrolling Capture (⌃⇧3)") {
                         NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerScrolling"), object: nil)
                     }
                     Divider()
@@ -330,7 +330,7 @@ public struct EditorView: View {
                     state.showLoupe.toggle()
                     state.showToast(state.showLoupe ? "8× Pixel Magnifier Loupe ON" : "Pixel Magnifier Loupe OFF")
                 }
-                .help("Toggle Live 8× Pixel Magnifier Loupe [L]")
+                .help("Toggle Live 8× Pixel Magnifier Loupe")
             }
 
             Spacer()
@@ -641,7 +641,7 @@ public struct EditorView: View {
                 WelcomeCaptureCard(
                     title: "Area Capture",
                     subtitle: "Drag crosshair over any region",
-                    shortcut: "⌘ ⇧ 2",
+                    shortcut: "⌃ ⇧ 2",
                     icon: "viewfinder",
                     accentColor: StudioTheme.accent
                 ) {
@@ -651,7 +651,7 @@ public struct EditorView: View {
                 WelcomeCaptureCard(
                     title: "Window Capture",
                     subtitle: "Snap any macOS window cleanly",
-                    shortcut: "⌘ ⇧ W",
+                    shortcut: "⌃ ⇧ W",
                     icon: "macwindow",
                     accentColor: Color(red: 0.20, green: 0.62, blue: 1.0)
                 ) {
@@ -661,7 +661,7 @@ public struct EditorView: View {
                 WelcomeCaptureCard(
                     title: "Scrolling Capture",
                     subtitle: "Auto-scroll & stitch tall pages",
-                    shortcut: "⌘ ⇧ 3",
+                    shortcut: "⌃ ⇧ 3",
                     icon: "arrow.up.and.down.text.horizontal",
                     accentColor: Color(red: 0.68, green: 0.36, blue: 0.96)
                 ) {
@@ -671,7 +671,7 @@ public struct EditorView: View {
                 WelcomeCaptureCard(
                     title: "Text & QR OCR",
                     subtitle: "Extract text or scan QR codes",
-                    shortcut: "⌘ ⇧ O",
+                    shortcut: "⌃ ⇧ O",
                     icon: "qrcode.viewfinder",
                     accentColor: Color(red: 0.18, green: 0.82, blue: 0.48)
                 ) {
@@ -1419,10 +1419,12 @@ struct CanvasInteractiveOverlay: View {
                     renderObject(item, in: geo.size)
                         .overlay(
                             Group {
-                                if isSelected {
-                                    SelectionHandlesOverlay(item: item) { handlePos, newPoint in
+                                if isSelected && ![.counter, .freehand, .highlighter, .text].contains(item.tool) {
+                                    SelectionHandlesOverlay(item: item, onResize: { handlePos, newPoint in
                                         resizeSelectedAnnotation(id: item.id, handle: handlePos, to: newPoint)
-                                    }
+                                    }, onEnd: {
+                                        state.dragStartSnapshot = nil
+                                    })
                                 }
                             }
                         )
@@ -1552,6 +1554,10 @@ struct CanvasInteractiveOverlay: View {
 
     private func resizeSelectedAnnotation(id: UUID, handle: ResizeHandlePosition, to pt: CGPoint) {
         guard let idx = state.annotations.firstIndex(where: { $0.id == id }) else { return }
+        if state.dragStartSnapshot == nil {
+            state.dragStartSnapshot = state.annotations[idx]
+            state.pushUndo()
+        }
         let r = state.annotations[idx].boundingRect
         switch handle {
         case .topLeft:
@@ -1796,6 +1802,7 @@ struct CanvasInteractiveOverlay: View {
 struct SelectionHandlesOverlay: View {
     let item: AnnotationItem
     let onResize: (ResizeHandlePosition, CGPoint) -> Void
+    let onEnd: () -> Void
 
     var body: some View {
         let r = item.boundingRect
@@ -1826,6 +1833,7 @@ struct SelectionHandlesOverlay: View {
                             .onChanged { drag in
                                 onResize(pos, drag.location)
                             }
+                            .onEnded { _ in onEnd() }
                     )
             }
         }
@@ -1946,18 +1954,33 @@ struct RealImageConcealView: View {
 struct KeyboardEventMonitorView: NSViewRepresentable {
     let onKeyDown: (NSEvent) -> Bool
 
+    final class Coordinator {
+        var monitor: Any?
+        var handler: ((NSEvent) -> Bool)?
+        deinit {
+            if let monitor = monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if onKeyDown(event) {
-                return nil
-            }
+        let coordinator = context.coordinator
+        coordinator.handler = onKeyDown
+        coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak view, weak coordinator] event in
+            // Only act for the editor window, and never while the user is typing in a text field.
+            guard let window = view?.window, event.window === window else { return event }
+            if window.firstResponder is NSTextView { return event }
+            if coordinator?.handler?(event) == true { return nil }
             return event
         }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.handler = onKeyDown
+    }
 }
 
 // MARK: - Vector Arrow Renderer (Single, Curved, Double)

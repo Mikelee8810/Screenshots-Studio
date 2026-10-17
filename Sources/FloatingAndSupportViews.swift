@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 // MARK: - 1. Pin Window Controller (Floating Borderless Reference Card with X-Ray & Custom HUD)
 
@@ -441,12 +442,6 @@ class PreferencesState: ObservableObject {
     @Published var afterGrabShow: Bool = UserDefaults.standard.object(forKey: "afterGrabShow") as? Bool ?? true {
         didSet { UserDefaults.standard.set(afterGrabShow, forKey: "afterGrabShow") }
     }
-    @Published var saveOnEsc: Bool = UserDefaults.standard.bool(forKey: "saveOnEsc") {
-        didSet { UserDefaults.standard.set(saveOnEsc, forKey: "saveOnEsc") }
-    }
-    @Published var copyOnEsc: Bool = UserDefaults.standard.object(forKey: "copyOnEsc") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(copyOnEsc, forKey: "copyOnEsc") }
-    }
     // Defaults to FALSE so the main window can be placed behind other windows normally
     @Published var editorAlwaysOnTop: Bool = UserDefaults.standard.bool(forKey: "editorAlwaysOnTop") {
         didSet {
@@ -469,15 +464,17 @@ class PreferencesState: ObservableObject {
     @Published var colorFormat: String = UserDefaults.standard.string(forKey: "colorFormat") ?? ColorCodeFormat.hex.rawValue {
         didSet { UserDefaults.standard.set(colorFormat, forKey: "colorFormat") }
     }
-    @Published var s3Endpoint: String = UserDefaults.standard.string(forKey: "s3Endpoint") ?? "" {
-        didSet { UserDefaults.standard.set(s3Endpoint, forKey: "s3Endpoint") }
+    @Published var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled {
+        didSet {
+            do {
+                if launchAtLogin { try SMAppService.mainApp.register() }
+                else { try SMAppService.mainApp.unregister() }
+            } catch {
+                NSLog("Launch at login change failed: \(error)")
+            }
+        }
     }
-    @Published var s3Bucket: String = UserDefaults.standard.string(forKey: "s3Bucket") ?? "" {
-        didSet { UserDefaults.standard.set(s3Bucket, forKey: "s3Bucket") }
-    }
-    @Published var s3PublicUrl: String = UserDefaults.standard.string(forKey: "s3PublicUrl") ?? "" {
-        didSet { UserDefaults.standard.set(s3PublicUrl, forKey: "s3PublicUrl") }
-    }
+    @Published var saveFolderPath: String = ScreenCaptureManager.shared.defaultSaveFolder.path
     @Published var showSnakeEasterEgg: Bool = false
 }
 
@@ -493,7 +490,7 @@ public struct PreferencesView: View {
                 ForEach([
                     (0, "General & Theme", "slider.horizontal.3"),
                     (1, "Shortcuts", "command"),
-                    (2, "Cloud & S3", "icloud.and.arrow.up"),
+                    (2, "Storage", "externaldrive"),
                     (3, "Advanced", "cpu")
                 ], id: \.0) { idx, title, icon in
                     StudioActionPill(title: title, systemIcon: icon, isPrimary: state.selectedTab == idx) {
@@ -522,8 +519,7 @@ public struct PreferencesView: View {
 
                         prefsCard(title: "WINDOW BEHAVIOR") {
                             Toggle("Keep Studio Editor floating above all windows (Disable to allow placing behind other apps)", isOn: $state.editorAlwaysOnTop)
-                            Toggle("Copy image to clipboard when closing on Esc", isOn: $state.copyOnEsc)
-                            Toggle("Save image to disk when closing on Esc", isOn: $state.saveOnEsc)
+                            Toggle("Launch Screenshots at login", isOn: $state.launchAtLogin)
                         }
 
                         prefsCard(title: "POST-CAPTURE WORKFLOW") {
@@ -533,14 +529,14 @@ public struct PreferencesView: View {
                         }
                     } else if state.selectedTab == 1 {
                         prefsCard(title: "GLOBAL CAPTURE SHORTCUTS") {
-                            shortcutRow("Fullscreen Screenshot", "⌘ ⇧ 1")
-                            shortcutRow("Area Screenshot", "⌘ ⇧ 2")
-                            shortcutRow("Scrolling Capture (Down)", "⌘ ⇧ 3")
-                            shortcutRow("Reverse Scrolling Capture (Up)", "⌘ ⇧ 4")
-                            shortcutRow("Capture Any Window", "⌘ ⇧ W")
-                            shortcutRow("Capture Active Window", "⌘ ⇧ A")
-                            shortcutRow("Repeat Last Area Capture", "⌘ ⇧ R")
-                            shortcutRow("Recognize Text / QR (OCR)", "⌘ ⇧ O")
+                            shortcutRow("Fullscreen Screenshot", "⌃ ⇧ 1")
+                            shortcutRow("Area Screenshot", "⌃ ⇧ 2")
+                            shortcutRow("Scrolling Capture (Down)", "⌃ ⇧ 3")
+                            shortcutRow("Reverse Scrolling Capture (Up)", "⌃ ⇧ 4")
+                            shortcutRow("Capture Any Window", "⌃ ⇧ W")
+                            shortcutRow("Capture Active Window", "⌃ ⇧ A")
+                            shortcutRow("Repeat Last Area Capture", "⌃ ⇧ R")
+                            shortcutRow("Recognize Text / QR (OCR)", "⌃ ⇧ O")
                         }
                         prefsCard(title: "SINGLE-KEY STUDIO CANVAS SHORTCUTS") {
                             Text("[V] Select/Move  •  [C] Crop  •  [A] Arrow  •  [R] Rectangle  •  [O] Oval  •  [L] Line  •  [F] Freehand  •  [H] Highlighter  •  [T] Text  •  [N] Step Counter  •  [S] Spotlight  •  [M] Magnifier  •  [B] Pixelate/Blur/Erase  •  [U] Ruler  •  [P] Pixels/Points  •  [Tab] Copy Pixel Color")
@@ -548,13 +544,26 @@ public struct PreferencesView: View {
                                 .foregroundColor(StudioTheme.textSecondary)
                         }
                     } else if state.selectedTab == 2 {
-                        prefsCard(title: "S3 / CLOUDFLARE R2 DIRECT UPLOAD") {
-                            TextField("S3 Endpoint URL (e.g. https://<id>.r2.cloudflarestorage.com)", text: $state.s3Endpoint)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Bucket Name", text: $state.s3Bucket)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("Public Domain URL", text: $state.s3PublicUrl)
-                                .textFieldStyle(.roundedBorder)
+                        prefsCard(title: "SAVE LOCATION") {
+                            Text(state.saveFolderPath)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundColor(StudioTheme.textSecondary)
+                                .lineLimit(2)
+                            HStack(spacing: 8) {
+                                StudioActionPill(title: "Choose Folder...", systemIcon: "folder") {
+                                    let panel = NSOpenPanel()
+                                    panel.canChooseDirectories = true
+                                    panel.canChooseFiles = false
+                                    panel.canCreateDirectories = true
+                                    if panel.runModal() == .OK, let url = panel.url {
+                                        ScreenCaptureManager.shared.defaultSaveFolder = url
+                                        state.saveFolderPath = url.path
+                                    }
+                                }
+                                StudioActionPill(title: "Reveal in Finder", systemIcon: "arrow.up.forward.app") {
+                                    NSWorkspace.shared.open(ScreenCaptureManager.shared.defaultSaveFolder)
+                                }
+                            }
                         }
                     } else {
                         prefsCard(title: "OCR, RETINA & COLOR SETTINGS") {

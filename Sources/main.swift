@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Carbon.HIToolbox
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
@@ -13,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ThemeManager.shared.applyWindowAppearance()
         setupMenuBar()
         setupNotificationObservers()
+        setupGlobalHotkeys()
         setupGlobalURLHandler()
         openEditor(with: nil)
     }
@@ -26,6 +28,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         nc.addObserver(self, selector: #selector(captureFullscreenAction), name: Notification.Name("ScreenshotsTriggerFullscreen"), object: nil)
         nc.addObserver(self, selector: #selector(captureScrollingDownAction), name: Notification.Name("ScreenshotsTriggerScrolling"), object: nil)
         nc.addObserver(self, selector: #selector(updateEditorWindowLevel), name: Notification.Name("ScreenshotsUpdateWindowLevel"), object: nil)
+    }
+
+    func setupGlobalHotkeys() {
+        let mods = controlKey | shiftKey
+        let hk = GlobalHotkeys.shared
+        hk.register(keyCode: kVK_ANSI_1, modifiers: mods) { [weak self] in self?.captureFullscreenAction() }
+        hk.register(keyCode: kVK_ANSI_2, modifiers: mods) { [weak self] in self?.captureAreaAction() }
+        hk.register(keyCode: kVK_ANSI_3, modifiers: mods) { [weak self] in self?.captureScrollingDownAction() }
+        hk.register(keyCode: kVK_ANSI_4, modifiers: mods) { [weak self] in self?.captureScrollingUpAction() }
+        hk.register(keyCode: kVK_ANSI_W, modifiers: mods) { [weak self] in self?.captureAnyWindowAction() }
+        hk.register(keyCode: kVK_ANSI_A, modifiers: mods) { [weak self] in self?.captureActiveWindowAction() }
+        hk.register(keyCode: kVK_ANSI_R, modifiers: mods) { [weak self] in self?.captureRepeatAreaAction() }
+        hk.register(keyCode: kVK_ANSI_O, modifiers: mods) { [weak self] in self?.captureOCRAction() }
+        hk.register(keyCode: kVK_ANSI_D, modifiers: mods) { [weak self] in self?.captureDelayedAction() }
     }
 
     @objc func updateEditorWindowLevel() {
@@ -52,56 +68,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         let fullItem = NSMenuItem(title: "Fullscreen Screenshot", action: #selector(captureFullscreenAction), keyEquivalent: "1")
-        fullItem.keyEquivalentModifierMask = [.command, .shift]
+        fullItem.keyEquivalentModifierMask = [.control, .shift]
         fullItem.image = NSImage(systemSymbolName: "display", accessibilityDescription: nil)
         menu.addItem(fullItem)
 
         let areaItem = NSMenuItem(title: "Area Screenshot", action: #selector(captureAreaAction), keyEquivalent: "2")
-        areaItem.keyEquivalentModifierMask = [.command, .shift]
+        areaItem.keyEquivalentModifierMask = [.control, .shift]
         areaItem.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
         menu.addItem(areaItem)
 
         let repeatAreaItem = NSMenuItem(title: "Repeat Area Capture", action: #selector(captureRepeatAreaAction), keyEquivalent: "r")
-        repeatAreaItem.keyEquivalentModifierMask = [.command, .shift]
+        repeatAreaItem.keyEquivalentModifierMask = [.control, .shift]
         repeatAreaItem.image = NSImage(systemSymbolName: "arrow.clockwise.square", accessibilityDescription: nil)
         menu.addItem(repeatAreaItem)
 
         let anyWinItem = NSMenuItem(title: "Capture Any Window", action: #selector(captureAnyWindowAction), keyEquivalent: "w")
-        anyWinItem.keyEquivalentModifierMask = [.command, .shift]
+        anyWinItem.keyEquivalentModifierMask = [.control, .shift]
         anyWinItem.image = NSImage(systemSymbolName: "macwindow.badge.plus", accessibilityDescription: nil)
         menu.addItem(anyWinItem)
 
         let activeWinItem = NSMenuItem(title: "Capture Active Window", action: #selector(captureActiveWindowAction), keyEquivalent: "a")
-        activeWinItem.keyEquivalentModifierMask = [.command, .shift]
+        activeWinItem.keyEquivalentModifierMask = [.control, .shift]
         activeWinItem.image = NSImage(systemSymbolName: "uiwindow.split.2x1", accessibilityDescription: nil)
         menu.addItem(activeWinItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let scrollDownItem = NSMenuItem(title: "Scrolling Capture (Down)", action: #selector(captureScrollingDownAction), keyEquivalent: "3")
-        scrollDownItem.keyEquivalentModifierMask = [.command, .shift]
+        scrollDownItem.keyEquivalentModifierMask = [.control, .shift]
         scrollDownItem.image = NSImage(systemSymbolName: "arrow.up.and.down.text.horizontal", accessibilityDescription: nil)
         menu.addItem(scrollDownItem)
 
         let scrollUpItem = NSMenuItem(title: "Reverse Scrolling Capture (Up)", action: #selector(captureScrollingUpAction), keyEquivalent: "4")
-        scrollUpItem.keyEquivalentModifierMask = [.command, .shift]
+        scrollUpItem.keyEquivalentModifierMask = [.control, .shift]
         scrollUpItem.image = NSImage(systemSymbolName: "arrow.up.doc", accessibilityDescription: nil)
         menu.addItem(scrollUpItem)
 
         let delayedItem = NSMenuItem(title: "Delayed Screenshot (3s)", action: #selector(captureDelayedAction), keyEquivalent: "d")
-        delayedItem.keyEquivalentModifierMask = [.command, .shift]
+        delayedItem.keyEquivalentModifierMask = [.control, .shift]
         delayedItem.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
         menu.addItem(delayedItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let ocrItem = NSMenuItem(title: "Recognize Text / QR Code", action: #selector(captureOCRAction), keyEquivalent: "o")
-        ocrItem.keyEquivalentModifierMask = [.command, .shift]
+        ocrItem.keyEquivalentModifierMask = [.control, .shift]
         ocrItem.image = NSImage(systemSymbolName: "qrcode.viewfinder", accessibilityDescription: nil)
         menu.addItem(ocrItem)
 
         let clipboardItem = NSMenuItem(title: "Load From Clipboard", action: #selector(loadClipboardAction), keyEquivalent: "v")
-        clipboardItem.keyEquivalentModifierMask = [.command, .shift]
+        clipboardItem.keyEquivalentModifierMask = [.control, .shift]
         clipboardItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
         menu.addItem(clipboardItem)
 
@@ -127,6 +143,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.writeObjects([image])
+        }
+
+        if UserDefaults.standard.bool(forKey: "afterGrabSave"),
+           let tiff = image.tiffRepresentation,
+           let bmp = NSBitmapImageRep(data: tiff),
+           let png = bmp.representation(using: .png, properties: [:]) {
+            let url = ScreenCaptureManager.shared.defaultSaveFolder
+                .appendingPathComponent("SCR-\(Int(Date().timeIntervalSince1970)).png")
+            try? png.write(to: url)
         }
 
         ThumbnailPreviewManager.shared.showThumbnail(
