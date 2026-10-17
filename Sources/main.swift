@@ -8,15 +8,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var libraryWindow: NSWindow?
     var preferencesWindow: NSWindow?
     var capturedImage: NSImage?
+    var recordMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.applicationIconImage = AppIconGenerator.makeAppIcon(size: 512)
         ThemeManager.shared.applyWindowAppearance()
+        setupMainMenu()
         setupMenuBar()
         setupNotificationObservers()
         setupGlobalHotkeys()
         setupGlobalURLHandler()
         openEditor(with: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { PermissionManager.promptIfNeeded() }
     }
 
     func setupNotificationObservers() {
@@ -27,21 +30,134 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         nc.addObserver(self, selector: #selector(captureAnyWindowAction), name: Notification.Name("ScreenshotsTriggerWindow"), object: nil)
         nc.addObserver(self, selector: #selector(captureFullscreenAction), name: Notification.Name("ScreenshotsTriggerFullscreen"), object: nil)
         nc.addObserver(self, selector: #selector(captureScrollingDownAction), name: Notification.Name("ScreenshotsTriggerScrolling"), object: nil)
+        nc.addObserver(self, selector: #selector(setupGlobalHotkeys), name: ShortcutStore.changedNotification, object: nil)
         nc.addObserver(self, selector: #selector(updateEditorWindowLevel), name: Notification.Name("ScreenshotsUpdateWindowLevel"), object: nil)
     }
 
-    func setupGlobalHotkeys() {
-        let mods = controlKey | shiftKey
+    func hotkeyHandler(for action: HotkeyAction) -> () -> Void {
+        switch action {
+        case .fullscreen: return { [weak self] in self?.captureFullscreenAction() }
+        case .area: return { [weak self] in self?.captureAreaAction() }
+        case .scrollDown: return { [weak self] in self?.captureScrollingDownAction() }
+        case .scrollUp: return { [weak self] in self?.captureScrollingUpAction() }
+        case .anyWindow: return { [weak self] in self?.captureAnyWindowAction() }
+        case .activeWindow: return { [weak self] in self?.captureActiveWindowAction() }
+        case .repeatArea: return { [weak self] in self?.captureRepeatAreaAction() }
+        case .ocr: return { [weak self] in self?.captureOCRAction() }
+        case .delayed: return { [weak self] in self?.captureDelayedAction() }
+        case .record: return { [weak self] in self?.toggleRecordingAction() }
+        }
+    }
+
+    @objc func setupGlobalHotkeys() {
         let hk = GlobalHotkeys.shared
-        hk.register(keyCode: kVK_ANSI_1, modifiers: mods) { [weak self] in self?.captureFullscreenAction() }
-        hk.register(keyCode: kVK_ANSI_2, modifiers: mods) { [weak self] in self?.captureAreaAction() }
-        hk.register(keyCode: kVK_ANSI_3, modifiers: mods) { [weak self] in self?.captureScrollingDownAction() }
-        hk.register(keyCode: kVK_ANSI_4, modifiers: mods) { [weak self] in self?.captureScrollingUpAction() }
-        hk.register(keyCode: kVK_ANSI_W, modifiers: mods) { [weak self] in self?.captureAnyWindowAction() }
-        hk.register(keyCode: kVK_ANSI_A, modifiers: mods) { [weak self] in self?.captureActiveWindowAction() }
-        hk.register(keyCode: kVK_ANSI_R, modifiers: mods) { [weak self] in self?.captureRepeatAreaAction() }
-        hk.register(keyCode: kVK_ANSI_O, modifiers: mods) { [weak self] in self?.captureOCRAction() }
-        hk.register(keyCode: kVK_ANSI_D, modifiers: mods) { [weak self] in self?.captureDelayedAction() }
+        hk.unregisterAll()
+        for action in HotkeyAction.allCases {
+            guard let b = ShortcutStore.shared.bindings[action] else { continue }
+            hk.register(keyCode: b.keyCode, modifiers: b.mods, handler: hotkeyHandler(for: action))
+        }
+        if statusItem?.menu != nil { setupMenuBar() }
+    }
+
+    @objc func toggleRecordingAction() {
+        let rec = ScreenRecorder.shared
+        if rec.isRecording {
+            rec.stop { [weak self] url in
+                DispatchQueue.main.async {
+                    self?.statusItem?.button?.title = ""
+                    self?.recordMenuItem?.title = "Start Screen Recording"
+                    if let url = url { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                }
+            }
+        } else {
+            editorWindow?.orderOut(nil)
+            rec.start { [weak self] error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn't start recording"
+                        alert.informativeText = error.localizedDescription + "\n\nCheck System Settings > Privacy & Security > Screen Recording."
+                        alert.runModal()
+                    } else {
+                        self?.statusItem?.button?.title = " ● REC"
+                        self?.recordMenuItem?.title = "Stop Screen Recording"
+                    }
+                }
+            }
+        }
+    }
+
+    @objc func gifFromLastRecordingAction() {
+        guard let url = ScreenRecorder.shared.lastRecordingURL, FileManager.default.fileExists(atPath: url.path) else {
+            let alert = NSAlert()
+            alert.messageText = "No recording yet"
+            alert.informativeText = "Record your screen first, then convert it to a GIF."
+            alert.runModal()
+            return
+        }
+        ScreenRecorder.shared.exportGIF(from: url) { gif in
+            DispatchQueue.main.async {
+                if let gif = gif { NSWorkspace.shared.activateFileViewerSelecting([gif]) }
+            }
+        }
+    }
+
+    func setupMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu(); appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "About Screenshots", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showPreferencesAction), keyEquivalent: ",")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Screenshots", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Quit Screenshots", action: #selector(quitAction), keyEquivalent: "q")
+
+        let fileItem = NSMenuItem(); main.addItem(fileItem)
+        let fileMenu = NSMenu(title: "File"); fileItem.submenu = fileMenu
+        fileMenu.addItem(withTitle: "Open Image…", action: #selector(openFileAction), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit"); editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let windowItem = NSMenuItem(); main.addItem(windowItem)
+        let windowMenu = NSMenu(title: "Window"); windowItem.submenu = windowMenu
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(withTitle: "Screenshot Library", action: #selector(showLibraryAction), keyEquivalent: "l")
+
+        NSApp.mainMenu = main
+        NSApp.windowsMenu = windowMenu
+    }
+
+    func applyShortcutsToMenu(_ menu: NSMenu) {
+        let map: [Selector: HotkeyAction] = [
+            #selector(captureFullscreenAction): .fullscreen,
+            #selector(captureAreaAction): .area,
+            #selector(captureScrollingDownAction): .scrollDown,
+            #selector(captureScrollingUpAction): .scrollUp,
+            #selector(captureAnyWindowAction): .anyWindow,
+            #selector(captureActiveWindowAction): .activeWindow,
+            #selector(captureRepeatAreaAction): .repeatArea,
+            #selector(captureOCRAction): .ocr,
+            #selector(captureDelayedAction): .delayed,
+            #selector(toggleRecordingAction): .record
+        ]
+        for item in menu.items {
+            guard let sel = item.action, let action = map[sel], let b = ShortcutStore.shared.bindings[action] else { continue }
+            item.keyEquivalent = b.label.lowercased()
+            item.keyEquivalentModifierMask = b.menuMask
+        }
     }
 
     @objc func updateEditorWindowLevel() {
@@ -50,9 +166,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem?.button {
-            button.image = AppIconGenerator.makeMenuBarIcon()
+        if statusItem == nil {
+            statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            if let button = statusItem?.button {
+                button.image = AppIconGenerator.makeMenuBarIcon()
+            }
         }
 
         let menu = NSMenu()
@@ -109,6 +227,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         delayedItem.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
         menu.addItem(delayedItem)
 
+        let recordItem = NSMenuItem(title: ScreenRecorder.shared.isRecording ? "Stop Screen Recording" : "Start Screen Recording", action: #selector(toggleRecordingAction), keyEquivalent: "5")
+        recordItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        menu.addItem(recordItem)
+        recordMenuItem = recordItem
+
+        let gifItem = NSMenuItem(title: "Convert Last Recording to GIF", action: #selector(gifFromLastRecordingAction), keyEquivalent: "")
+        gifItem.image = NSImage(systemSymbolName: "photo.stack", accessibilityDescription: nil)
+        menu.addItem(gifItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let ocrItem = NSMenuItem(title: "Recognize Text / QR Code", action: #selector(captureOCRAction), keyEquivalent: "o")
@@ -133,6 +260,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem(title: "Quit Screenshots", action: #selector(quitAction), keyEquivalent: "q"))
 
+        applyShortcutsToMenu(menu)
         statusItem?.menu = menu
     }
 
@@ -407,6 +535,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quitAction() {
         NSApplication.shared.terminate(nil)
     }
+}
+
+if let idx = CommandLine.arguments.firstIndex(of: "--export-iconset"), idx + 1 < CommandLine.arguments.count {
+    _ = NSApplication.shared
+    let dir = URL(fileURLWithPath: CommandLine.arguments[idx + 1])
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let sizes: [(String, Int)] = [
+        ("icon_16x16", 16), ("icon_16x16@2x", 32), ("icon_32x32", 32), ("icon_32x32@2x", 64),
+        ("icon_128x128", 128), ("icon_128x128@2x", 256), ("icon_256x256", 256), ("icon_256x256@2x", 512),
+        ("icon_512x512", 512), ("icon_512x512@2x", 1024)
+    ]
+    let source = AppIconGenerator.makeAppIcon(size: 1024)
+    for (name, px) in sizes {
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        source.draw(in: NSRect(x: 0, y: 0, width: px, height: px))
+        NSGraphicsContext.restoreGraphicsState()
+        if let png = rep.representation(using: .png, properties: [:]) {
+            try? png.write(to: dir.appendingPathComponent("\(name).png"))
+        }
+    }
+    exit(0)
 }
 
 let app = NSApplication.shared

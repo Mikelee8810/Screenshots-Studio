@@ -21,6 +21,10 @@ A fast, native macOS screen capture, annotation, OCR, and presentation studio bu
 - **Pin Reference Windows**:
   - Pin floating borderless screenshots anywhere on screen with **X-Ray semi-transparency** mode.
 
+- **Screen Recording & GIF**: Record your display to MP4 (ScreenCaptureKit, ⌃⇧5 by default) and convert any recording to a looping GIF from the menu bar.
+- **Customizable global shortcuts**: Click any shortcut in Settings → Shortcuts and press a new combo.
+- **Real macOS menus** (App / File / Edit / Window), launch at login, first-run Screen Recording permission check, and a proper app icon.
+
 ## 🚀 Quick Build & Run on Any Mac
 
 ```bash

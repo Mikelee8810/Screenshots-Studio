@@ -14,6 +14,10 @@ mkdir -p "${BUNDLE_DIR}/Contents/Resources"
 
 cp -f ".build/release/${APP_NAME}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
 
+ICONSET="$(mktemp -d)/AppIcon.iconset"
+"${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" --export-iconset "${ICONSET}" || true
+iconutil -c icns "${ICONSET}" -o "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" || true
+
 cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,6 +27,8 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
     <string>com.screenshots.studio</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
@@ -35,6 +41,8 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
     <string>220</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Screenshots needs Screen Recording access to capture and record your screen.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

@@ -20,6 +20,12 @@ final class GlobalHotkeys {
         if status == noErr { refs.append(ref) }
     }
 
+    func unregisterAll() {
+        for ref in refs { if let ref = ref { UnregisterEventHotKey(ref) } }
+        refs.removeAll()
+        handlers.removeAll()
+    }
+
     private func installIfNeeded() {
         guard !installed else { return }
         installed = true

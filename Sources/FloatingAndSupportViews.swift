@@ -528,15 +528,16 @@ public struct PreferencesView: View {
                             Toggle("Automatically save file to default folder", isOn: $state.afterGrabSave)
                         }
                     } else if state.selectedTab == 1 {
-                        prefsCard(title: "GLOBAL CAPTURE SHORTCUTS") {
-                            shortcutRow("Fullscreen Screenshot", "⌃ ⇧ 1")
-                            shortcutRow("Area Screenshot", "⌃ ⇧ 2")
-                            shortcutRow("Scrolling Capture (Down)", "⌃ ⇧ 3")
-                            shortcutRow("Reverse Scrolling Capture (Up)", "⌃ ⇧ 4")
-                            shortcutRow("Capture Any Window", "⌃ ⇧ W")
-                            shortcutRow("Capture Active Window", "⌃ ⇧ A")
-                            shortcutRow("Repeat Last Area Capture", "⌃ ⇧ R")
-                            shortcutRow("Recognize Text / QR (OCR)", "⌃ ⇧ O")
+                        prefsCard(title: "GLOBAL SHORTCUTS (click one to change it)") {
+                            ForEach(HotkeyAction.allCases) { action in
+                                ShortcutRecorderRow(action: action)
+                            }
+                            HStack {
+                                Spacer()
+                                StudioActionPill(title: "Reset to Defaults", systemIcon: "arrow.counterclockwise") {
+                                    ShortcutStore.shared.resetAll()
+                                }
+                            }
                         }
                         prefsCard(title: "SINGLE-KEY STUDIO CANVAS SHORTCUTS") {
                             Text("[V] Select/Move  •  [C] Crop  •  [A] Arrow  •  [R] Rectangle  •  [O] Oval  •  [L] Line  •  [F] Freehand  •  [H] Highlighter  •  [T] Text  •  [N] Step Counter  •  [S] Spotlight  •  [M] Magnifier  •  [B] Pixelate/Blur/Erase  •  [U] Ruler  •  [P] Pixels/Points  •  [Tab] Copy Pixel Color")
