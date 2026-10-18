@@ -246,6 +246,26 @@ public struct CustomToolIcon: View {
                 mtn.addLine(to: CGPoint(x: w * 0.70, y: h * 0.50))
                 mtn.addLine(to: CGPoint(x: w * 0.78, y: h * 0.70))
                 ctx.stroke(mtn, with: .color(fg), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+
+            case .backdrop:
+                let outer = CGRect(x: w * 0.16, y: h * 0.20, width: w * 0.68, height: h * 0.60)
+                ctx.stroke(Path(roundedRect: outer, cornerRadius: 3), with: .color(fg), style: stroke)
+                let inner = CGRect(x: w * 0.28, y: h * 0.32, width: w * 0.44, height: h * 0.36)
+                ctx.fill(Path(roundedRect: inner, cornerRadius: 2), with: .color(fg.opacity(0.35)))
+                ctx.stroke(Path(roundedRect: inner, cornerRadius: 2), with: .color(fg), style: StrokeStyle(lineWidth: 1.2))
+
+            case .append:
+                var p = Path()
+                let r = CGRect(x: w * 0.20, y: h * 0.18, width: w * 0.60, height: h * 0.44)
+                p.addRoundedRect(in: r, cornerSize: CGSize(width: 2.5, height: 2.5))
+                ctx.stroke(p, with: .color(fg), style: stroke)
+                var arrow = Path()
+                arrow.move(to: CGPoint(x: w * 0.50, y: h * 0.54))
+                arrow.addLine(to: CGPoint(x: w * 0.50, y: h * 0.82))
+                arrow.move(to: CGPoint(x: w * 0.36, y: h * 0.70))
+                arrow.addLine(to: CGPoint(x: w * 0.50, y: h * 0.82))
+                arrow.addLine(to: CGPoint(x: w * 0.64, y: h * 0.70))
+                ctx.stroke(arrow, with: .color(fg), style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
             }
         }
         .frame(width: 19, height: 19)

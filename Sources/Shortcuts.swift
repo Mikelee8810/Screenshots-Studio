@@ -25,18 +25,32 @@ enum HotkeyAction: String, CaseIterable, Identifiable {
     }
 
     var defaultBinding: HotkeyBinding {
-        let mods = controlKey | shiftKey
         switch self {
-        case .fullscreen: return HotkeyBinding(keyCode: kVK_ANSI_1, mods: mods, label: "1")
-        case .area: return HotkeyBinding(keyCode: kVK_ANSI_2, mods: mods, label: "2")
-        case .scrollDown: return HotkeyBinding(keyCode: kVK_ANSI_3, mods: mods, label: "3")
-        case .scrollUp: return HotkeyBinding(keyCode: kVK_ANSI_4, mods: mods, label: "4")
-        case .anyWindow: return HotkeyBinding(keyCode: kVK_ANSI_W, mods: mods, label: "W")
-        case .activeWindow: return HotkeyBinding(keyCode: kVK_ANSI_A, mods: mods, label: "A")
-        case .repeatArea: return HotkeyBinding(keyCode: kVK_ANSI_R, mods: mods, label: "R")
-        case .ocr: return HotkeyBinding(keyCode: kVK_ANSI_O, mods: mods, label: "O")
-        case .delayed: return HotkeyBinding(keyCode: kVK_ANSI_D, mods: mods, label: "D")
-        case .record: return HotkeyBinding(keyCode: kVK_ANSI_5, mods: mods, label: "5")
+        case .fullscreen:
+            // Shottr default: ⌘ ⇧ 1
+            return HotkeyBinding(keyCode: kVK_ANSI_1, mods: cmdKey | shiftKey, label: "1")
+        case .area:
+            // Shottr default: ⌘ ⇧ 1 or ⌘ ⇧ 4 / ⌘ ⇧ 2 (keyCode 21 = 4)
+            return HotkeyBinding(keyCode: kVK_ANSI_4, mods: cmdKey | shiftKey, label: "4")
+        case .scrollDown:
+            // Shottr default: ⌥ ⇧ 5 (keyCode 23 = 5, mods 2560 = optionKey | shiftKey)
+            return HotkeyBinding(keyCode: kVK_ANSI_5, mods: optionKey | shiftKey, label: "5")
+        case .scrollUp:
+            return HotkeyBinding(keyCode: kVK_ANSI_4, mods: optionKey | shiftKey, label: "4")
+        case .anyWindow:
+            // Shottr default: ⌘ ⇧ W (or ⌘ ⇧ 5)
+            return HotkeyBinding(keyCode: kVK_ANSI_W, mods: cmdKey | shiftKey, label: "W")
+        case .activeWindow:
+            return HotkeyBinding(keyCode: kVK_ANSI_A, mods: cmdKey | shiftKey, label: "A")
+        case .repeatArea:
+            return HotkeyBinding(keyCode: kVK_ANSI_R, mods: cmdKey | shiftKey, label: "R")
+        case .ocr:
+            // Shottr default: ⌃ ⌥ ⌘ O (mods 6400 = controlKey | optionKey | cmdKey, keyCode 31 = O)
+            return HotkeyBinding(keyCode: kVK_ANSI_O, mods: controlKey | optionKey | cmdKey, label: "O")
+        case .delayed:
+            return HotkeyBinding(keyCode: kVK_ANSI_D, mods: cmdKey | shiftKey, label: "D")
+        case .record:
+            return HotkeyBinding(keyCode: kVK_ANSI_5, mods: controlKey | shiftKey, label: "5")
         }
     }
 }

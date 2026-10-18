@@ -36,6 +36,8 @@ public enum ToolMode: String, CaseIterable, Identifiable {
     case magnifier = "Magnifier"
     case ruler = "Pixel Ruler"
     case image = "Overlay Image"
+    case backdrop = "Backdrop Studio"
+    case append = "Append Screenshot"
 
     public var id: String { rawValue }
 
@@ -56,7 +58,30 @@ public enum ToolMode: String, CaseIterable, Identifiable {
         case .magnifier: return "M"
         case .ruler: return "U"
         case .image: return "I"
+        case .backdrop: return "K"
+        case .append: return "⇧⌘A"
         }
+    }
+
+    /// The exact 15 instrument tools matching Shottr's toolbarInstruments
+    public static var shottrInstruments: [ToolMode] {
+        [
+            .arrow,
+            .text,
+            .ruler,
+            .rect,
+            .backdrop,
+            .freehand,
+            .magnifier,
+            .append,
+            .conceal,
+            .highlighter,
+            .spotlight,
+            .counter,
+            .oval,
+            .line,
+            .image
+        ]
     }
 }
 

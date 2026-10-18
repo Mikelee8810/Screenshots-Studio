@@ -16,6 +16,8 @@ class EditorState: ObservableObject {
     @Published var selectedItemID: UUID? = nil
     @Published var dragStartSnapshot: AnnotationItem? = nil
     @Published var counterStep: Int = 1
+    // Selection Rect for Crop, Cut Out, Erase, OCR, Imprint Size
+    @Published var selectionRect: CGRect? = nil
 
     // Sub-style options
     @Published var arrowStyle: ArrowStyle = .single
@@ -136,9 +138,9 @@ public struct EditorView: View {
                         ScrollView([.horizontal, .vertical], showsIndicators: true) {
                             renderedCanvasView(for: img)
                                 .scaleEffect(state.zoomScale)
-                                .padding(.top, 36)
-                                .padding(.horizontal, 48)
-                                .padding(.bottom, 128) // Extra space for floating bottom dock
+                                .padding(.top, 24)
+                                .padding(.horizontal, 36)
+                                .padding(.bottom, 24)
                         }
                     } else {
                         emptyWorkspaceWelcomeView
@@ -148,24 +150,6 @@ public struct EditorView: View {
                     if let pt = state.pendingTextPoint {
                         floatingTextEntryHUD(at: pt)
                     }
-
-                    // Floating Bottom Glass Instrument Dock + Contextual Style Pill + Zoom Pill
-                    VStack(spacing: 8) {
-                        Spacer()
-
-                        // Contextual Style Bar (Color Swatches + Stroke Weight + Tool Sub-Modes + Undo/Redo)
-                        floatingContextualStylePill
-
-                        // Bottom Dock Row: 15 Custom Vector Tools + Zoom Pill
-                        HStack(spacing: 12) {
-                            floatingBottomToolDock
-
-                            if image != nil {
-                                zoomControlPill
-                            }
-                        }
-                    }
-                    .padding(.bottom, 16)
 
                     // Toast Notification Pill
                     if let toast = state.toastMessage {
@@ -227,393 +211,453 @@ public struct EditorView: View {
         }
     }
 
-    // MARK: - Top Studio Header Bar (78px Leading Safe Area for macOS Traffic Lights)
+    // MARK: - Shottr-Aligned Top Studio Header Bar (2 Tiers with 74px Safe Inset for Traffic Lights)
     private var topStudioHeaderBar: some View {
-        HStack(spacing: 8) {
-            // Left: New Capture Menu + Dimensions Badge + Live Eyedropper + Loupe Toggle
-            HStack(spacing: 6) {
-                Menu {
-                    Button("Area Capture (⌃⇧2)") {
-                        NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerArea"), object: nil)
-                    }
-                    Button("Window Capture (⌃⇧W)") {
-                        NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerWindow"), object: nil)
-                    }
-                    Button("Fullscreen Capture (⌃⇧1)") {
-                        NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerFullscreen"), object: nil)
-                    }
-                    Button("Scrolling Capture (⌃⇧3)") {
-                        NotificationCenter.default.post(name: Notification.Name("ScreenshotsTriggerScrolling"), object: nil)
-                    }
-                    Divider()
-                    Button("Paste Image from Clipboard (⌘V)") {
-                        loadFromClipboard()
-                    }
-                    Button("Open Image File...") {
-                        openImageFilePanel()
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "camera.viewfinder")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundColor(StudioTheme.accent)
-                        Text("Capture")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundColor(StudioTheme.textPrimary)
-                    }
-                    .padding(.horizontal, 9)
-                    .frame(height: 28)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(StudioTheme.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(StudioTheme.border, lineWidth: 1))
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Start a new screenshot capture")
+        VStack(spacing: 0) {
+            // Tier 1: Export Actions + Selection/Crop Bar + Utility Badges (Height 38)
+            HStack(spacing: 8) {
+                // Traffic light safe area + Brand & Export Group
+                HStack(spacing: 6) {
+                    Image(systemName: "camera.viewfinder")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(StudioTheme.accent)
+                        .help("Screenshots Studio")
 
-                if let img = image {
-                    let mult: CGFloat = state.showLogicalPoints ? 0.5 : 1.0
-                    let unit = state.showLogicalPoints ? "pt" : "px"
-                    Button(action: {
-                        state.showLogicalPoints.toggle()
-                        state.showToast(state.showLogicalPoints ? "Logical Points (1pt = 2px)" : "Physical Pixels")
-                    }) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "aspectratio")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(StudioTheme.accent)
-                            Text("\(Int(img.size.width * mult)) × \(Int(img.size.height * mult)) \(unit)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundColor(StudioTheme.textPrimary)
+                    // scExportButtons: [Copy | Save | Pin]
+                    HStack(spacing: 0) {
+                        Button(action: { copyToClipboard() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Text("Copy")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 26)
                         }
+                        .buttonStyle(.plain)
+                        .help("Copy Rendered Image to Clipboard (⌘C or Esc)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { saveToDefaultFolder() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.down.to.line")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Text("Save")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Save Image to Folder (⌘S)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { pinCurrentImage() }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "pin.fill")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                Text("Pin")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Pin Image to Floating Window (⌘P)")
+                    }
+                    .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(StudioTheme.border, lineWidth: 1))
+
+                    // btnDragOut: Draggable Thumbnail Handle
+                    if let img = image {
+                        DraggableThumbnailButton(imageProvider: { renderFlattenedImage() ?? img })
+                    }
+                }
+                .padding(.leading, 74)
+
+                Divider().frame(height: 16)
+
+                // Selection & Crop Group: btnCrop + scSelectionButtons
+                HStack(spacing: 5) {
+                    let hasSelection = state.selectionRect != nil
+                    Button(action: { cropToSelection() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "crop")
+                                .font(.system(size: 10.5, weight: .bold))
+                            Text("Crop")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .foregroundColor(hasSelection ? .white : StudioTheme.textPrimary)
                         .padding(.horizontal, 9)
-                        .frame(height: 28)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(StudioTheme.surface))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(StudioTheme.border, lineWidth: 1))
+                        .frame(height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(hasSelection ? StudioTheme.accent : StudioTheme.surface)
+                        )
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(hasSelection ? StudioTheme.accent : StudioTheme.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    .help("Click or press [P] to toggle Physical Pixels vs Logical Points")
-                }
+                    .help("Crop to Selection (C)")
 
-                // Live Eyedropper Color Swatch
-                Menu {
-                    ForEach(ColorCodeFormat.allCases) { fmt in
-                        Button(fmt.rawValue) {
-                            state.colorFormat = fmt
-                            copyHoveredColor()
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color(nsColor: state.hoveredColor))
-                            .frame(width: 12, height: 12)
-                            .overlay(Circle().stroke(StudioTheme.borderStrong, lineWidth: 1))
-                        Text(ScreenCaptureManager.shared.formatColor(state.hoveredColor, format: state.colorFormat))
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    HStack(spacing: 0) {
+                        Button(action: { autoadjustSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "wand.and.stars")
+                                    .font(.system(size: 10))
+                                Text("Auto")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
                             .foregroundColor(StudioTheme.textPrimary)
-                            .lineLimit(1)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Autoadjust Selection to Edges (A)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { resizeSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.up.left.and.down.right")
+                                    .font(.system(size: 10))
+                                Text("Resize")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Resize Selection (⌘])")
+                        .popover(isPresented: $state.showResizePopover) {
+                            resizePopoverContent
+                        }
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { ocrSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "text.viewfinder")
+                                    .font(.system(size: 10))
+                                Text("OCR")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Recognize Text or QR Code in Selection (⌘O)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { imprintSelectionSize() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "ruler")
+                                    .font(.system(size: 10))
+                                Text("Size")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Imprint Selection Size Lines & Callout")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { eraseSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "eraser.fill")
+                                    .font(.system(size: 10))
+                                Text("Erase")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Erase Selection Area (Del / Backspace)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { cutOutSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "scissors")
+                                    .font(.system(size: 10))
+                                Text("Cut Out")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textPrimary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cut Out Selection Strip and Join Halves (X)")
+
+                        Divider().frame(height: 14)
+
+                        Button(action: { resetSelection() }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10))
+                                Text("Reset")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(StudioTheme.textSecondary)
+                            .padding(.horizontal, 7)
+                            .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Reset Selection Box (Esc)")
                     }
-                    .padding(.horizontal, 8)
-                    .frame(width: 112, height: 28)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(StudioTheme.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(StudioTheme.border, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(StudioTheme.border, lineWidth: 1))
+                    .opacity(hasSelection ? 1.0 : 0.65)
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Hover over any pixel and press [Tab] to copy its color")
 
-                StudioActionPill(
-                    title: "",
-                    systemIcon: "scope",
-                    isPrimary: state.showLoupe
-                ) {
-                    state.showLoupe.toggle()
-                    state.showToast(state.showLoupe ? "8× Pixel Magnifier Loupe ON" : "Pixel Magnifier Loupe OFF")
-                }
-                .help("Toggle Live 8× Pixel Magnifier Loupe")
-            }
+                Spacer()
 
-            Spacer()
-
-            // Center: Studio App Controls (Library, Theme Mode, Keep-on-Top Toggle, Settings)
-            HStack(spacing: 6) {
-                StudioActionPill(title: "Library", systemIcon: "photo.on.rectangle.angled") {
-                    NotificationCenter.default.post(name: Notification.Name("ScreenshotsOpenLibrary"), object: nil)
-                }
-                .help("Open Screenshot History & OCR Search")
-
-                StudioActionPill(
-                    title: theme.mode.rawValue,
-                    systemIcon: theme.mode.icon
-                ) {
-                    theme.cycleMode()
-                    state.showToast("Appearance: \(theme.mode.rawValue) Mode")
-                }
-                .help("Switch between Dark, Light, and System Auto Appearance")
-
-                StudioActionPill(
-                    title: "",
-                    systemIcon: state.isFloatingWindow ? "macwindow.on.rectangle" : "macwindow",
-                    isPrimary: state.isFloatingWindow
-                ) {
-                    state.isFloatingWindow.toggle()
-                    state.showToast(state.isFloatingWindow ? "Window set to Float Above All Apps" : "Standard Window Mode (Can place behind other windows)")
-                }
-                .help(state.isFloatingWindow ? "Floating Above Apps (Click to return to Normal window level)" : "Normal Window Level (Click to keep window floating on top)")
-
-                StudioActionPill(title: "", systemIcon: "gearshape.fill") {
-                    NotificationCenter.default.post(name: Notification.Name("ScreenshotsOpenPreferences"), object: nil)
-                }
-                .help("Open Settings & Preferences (⌘,)")
-            }
-
-            Spacer()
-
-            // Right: Studio Actions (Backdrop, Resize, Lift Subject, OCR, Pin, Drag-Out, Copy, Save)
-            HStack(spacing: 6) {
-                StudioActionPill(
-                    title: "Backdrop",
-                    systemIcon: "sparkles.rectangle.stack",
-                    isPrimary: state.backdrop.mode != .none || state.showBackdropInspector
-                ) {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-                        state.showBackdropInspector.toggle()
-                    }
-                }
-                .help("Open Backdrop Studio (Gradients, Aspect Ratios, Window Header, Shadows)")
-
-                StudioActionPill(title: "", systemIcon: "arrow.up.left.and.down.right") {
+                // Utility Badges & Window Controls
+                HStack(spacing: 6) {
                     if let img = image {
-                        state.targetWidthText = "\(Int(img.size.width))"
-                        state.targetHeightText = "\(Int(img.size.height))"
-                        state.showResizePopover.toggle()
+                        let mult: CGFloat = state.showLogicalPoints ? 0.5 : 1.0
+                        let unit = state.showLogicalPoints ? "pt" : "px"
+                        Button(action: {
+                            state.showLogicalPoints.toggle()
+                            state.showToast(state.showLogicalPoints ? "Logical Points (1pt = 2px)" : "Physical Pixels")
+                        }) {
+                            Text("\(Int(img.size.width * mult)) × \(Int(img.size.height * mult)) \(unit)")
+                                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                .foregroundColor(StudioTheme.textPrimary)
+                                .padding(.horizontal, 7)
+                                .frame(height: 26)
+                                .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.surface))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(StudioTheme.border, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Toggle Pixels vs Points [P]")
                     }
-                }
-                .help("Resize or Scale Image")
-                .popover(isPresented: $state.showResizePopover) {
-                    resizePopoverContent
-                }
 
-                StudioActionPill(title: "", systemIcon: "person.crop.rectangle") {
-                    liftSubjectAction()
-                }
-                .help("Remove Background / Lift Foreground Subject (Vision AI)")
-
-                StudioActionPill(title: "OCR", systemIcon: "text.viewfinder") {
-                    runOCR()
-                }
-                .help("Extract Text & QR Codes")
-
-                StudioActionPill(title: "Pin", systemIcon: "pin.fill") {
-                    pinCurrentImage()
-                }
-                .help("Create a Separate Mini Pinned Reference Window")
-
-                if let img = image {
-                    DraggableThumbnailButton(imageProvider: { renderFlattenedImage() ?? img })
-                }
-
-                StudioActionPill(title: "Copy", systemIcon: "doc.on.doc", isPrimary: true) {
-                    copyToClipboard()
-                }
-                .help("Copy Rendered Image to Clipboard (⌘C)")
-
-                StudioActionPill(title: "Save", systemIcon: "arrow.down.to.line") {
-                    saveToDefaultFolder()
-                }
-                .help("Save Image to Folder (⌘S)")
-            }
-        }
-        .padding(.leading, 78) // Safe inset so macOS traffic lights never overlap buttons
-        .padding(.trailing, 14)
-        .padding(.vertical, 8)
-        .background(StudioTheme.bgBar)
-    }
-
-    // MARK: - Floating Contextual Style Pill (Above Bottom Dock)
-    private var floatingContextualStylePill: some View {
-        HStack(spacing: 12) {
-            // Precision Color Swatches + Color Picker
-            HStack(spacing: 5) {
-                ForEach([
-                    Color(red: 1.0, green: 0.24, blue: 0.19), // Coral Red
-                    Color(red: 1.0, green: 0.58, blue: 0.0),  // Amber Orange
-                    Color(red: 1.0, green: 0.84, blue: 0.04), // Highlighter Yellow
-                    Color(red: 0.19, green: 0.82, blue: 0.35),// Emerald Green
-                    Color(red: 0.04, green: 0.52, blue: 1.0), // System Blue
-                    Color(red: 0.69, green: 0.32, blue: 0.87),// Royal Purple
-                    Color.white,
-                    Color(red: 0.12, green: 0.12, blue: 0.14)
-                ], id: \.self) { swatch in
-                    let isCurrent = state.strokeColor == swatch
-                    Circle()
-                        .fill(swatch)
-                        .frame(width: 16, height: 16)
-                        .overlay(
+                    // Eyedropper Swatch
+                    Menu {
+                        ForEach(ColorCodeFormat.allCases) { fmt in
+                            Button(fmt.rawValue) {
+                                state.colorFormat = fmt
+                                copyHoveredColor()
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
                             Circle()
-                                .stroke(isCurrent ? StudioTheme.textPrimary : StudioTheme.borderStrong, lineWidth: isCurrent ? 2.0 : 1.0)
+                                .fill(Color(nsColor: state.hoveredColor))
+                                .frame(width: 10, height: 10)
+                                .overlay(Circle().stroke(StudioTheme.borderStrong, lineWidth: 1))
+                            Text(ScreenCaptureManager.shared.formatColor(state.hoveredColor, format: state.colorFormat))
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundColor(StudioTheme.textPrimary)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 7)
+                        .frame(height: 26)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(StudioTheme.border, lineWidth: 1))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Hover over any pixel and press [Tab] to copy color")
+
+                    StudioActionPill(title: "", systemIcon: "scope", isPrimary: state.showLoupe) {
+                        state.showLoupe.toggle()
+                        state.showToast(state.showLoupe ? "8× Pixel Loupe ON" : "Pixel Loupe OFF")
+                    }
+                    .help("Toggle Live 8× Pixel Magnifier Loupe")
+
+                    // Zoom Pill
+                    HStack(spacing: 3) {
+                        Button("Fit") { state.zoomScale = 1.0 }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(StudioTheme.textSecondary)
+                            .padding(.horizontal, 4)
+                        Text("\(Int(state.zoomScale * 100))%")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(StudioTheme.textPrimary)
+                    }
+                    .frame(height: 26)
+                    .padding(.horizontal, 6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(StudioTheme.border, lineWidth: 1))
+
+                    StudioActionPill(title: "", systemIcon: theme.mode.icon) {
+                        theme.cycleMode()
+                        state.showToast("Appearance: \(theme.mode.rawValue)")
+                    }
+                    .help("Switch Theme (Dark / Light / Auto)")
+
+                    StudioActionPill(title: "", systemIcon: state.isFloatingWindow ? "macwindow.on.rectangle" : "macwindow", isPrimary: state.isFloatingWindow) {
+                        state.isFloatingWindow.toggle()
+                        state.showToast(state.isFloatingWindow ? "Window set to Float on Top" : "Standard Window Level")
+                    }
+                    .help(state.isFloatingWindow ? "Floating (Click for standard window)" : "Standard (Click to float)")
+
+                    StudioActionPill(title: "", systemIcon: "gearshape.fill") {
+                        NotificationCenter.default.post(name: Notification.Name("ScreenshotsOpenPreferences"), object: nil)
+                    }
+                    .help("Settings & Preferences (⌘,)")
+                }
+                .padding(.trailing, 12)
+            }
+            .frame(height: 38)
+
+            Divider()
+
+            // Tier 2: Shottr's 15 Instruments + Swatch + Stroke Slider + Sub-Options + Undo/Redo (Height 34)
+            HStack(spacing: 8) {
+                // toolbarInstruments: 15 items in Shottr order
+                HStack(spacing: 2) {
+                    ForEach(ToolMode.shottrInstruments) { tool in
+                        StudioIconButton(
+                            tool: tool,
+                            isSelected: state.currentTool == tool,
+                            action: {
+                                if tool == .backdrop {
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                                        state.showBackdropInspector.toggle()
+                                    }
+                                } else if tool == .append {
+                                    appendImageAction()
+                                } else if tool == .image {
+                                    state.currentTool = .image
+                                    pickOverlayImage()
+                                } else {
+                                    state.currentTool = tool
+                                }
+                            }
                         )
-                        .scaleEffect(isCurrent ? 1.14 : 1.0)
-                        .onTapGesture {
-                            state.strokeColor = swatch
-                            updateSelectedAnnotation { $0.color = swatch }
-                        }
-                }
-
-                ColorPicker("", selection: $state.strokeColor)
-                    .labelsHidden()
-                    .frame(width: 20, height: 20)
-            }
-
-            Rectangle()
-                .fill(StudioTheme.border)
-                .frame(width: 1, height: 16)
-
-            // Stroke Weight Slider
-            HStack(spacing: 6) {
-                Image(systemName: "lineweight")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(StudioTheme.textSecondary)
-                Slider(value: $state.strokeWidth, in: 1.5...16)
-                    .frame(width: 82)
-                    .onChange(of: state.strokeWidth) { newVal in
-                        updateSelectedAnnotation { $0.lineWidth = newVal }
-                    }
-                Text("\(Int(state.strokeWidth))px")
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundColor(StudioTheme.textSecondary)
-                    .frame(width: 28, alignment: .leading)
-            }
-
-            // Contextual Tool Sub-Options
-            if state.currentTool == .arrow {
-                Rectangle().fill(StudioTheme.border).frame(width: 1, height: 16)
-                StudioSegmentedPills(items: ArrowStyle.allCases, selection: $state.arrowStyle)
-            } else if state.currentTool == .rect || state.currentTool == .oval {
-                Rectangle().fill(StudioTheme.border).frame(width: 1, height: 16)
-                StudioSegmentedPills(items: ShapeFillStyle.allCases, selection: $state.fillStyle)
-            } else if state.currentTool == .conceal {
-                Rectangle().fill(StudioTheme.border).frame(width: 1, height: 16)
-                StudioSegmentedPills(items: ConcealMode.allCases, selection: $state.concealMode)
-            } else if state.currentTool == .text {
-                Rectangle().fill(StudioTheme.border).frame(width: 1, height: 16)
-                StudioSegmentedPills(items: TextFontStyle.allCases, selection: $state.fontStyle)
-            } else if state.currentTool == .line {
-                Rectangle().fill(StudioTheme.border).frame(width: 1, height: 16)
-                Toggle("Dashed", isOn: $state.isDashed)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(StudioTheme.textPrimary)
-            }
-
-            Rectangle()
-                .fill(StudioTheme.border)
-                .frame(width: 1, height: 16)
-
-            // Selection / Undo / Redo / Clear
-            HStack(spacing: 5) {
-                if state.selectedItemID != nil {
-                    StudioActionPill(title: "Delete", systemIcon: "trash.fill", isPrimary: true) {
-                        state.deleteSelected()
                     }
                 }
+                .padding(.leading, 74)
 
-                StudioActionPill(title: "", systemIcon: "arrow.uturn.backward") {
-                    state.undo()
-                }
-                .opacity(state.undoStack.isEmpty ? 0.4 : 1.0)
-                .disabled(state.undoStack.isEmpty)
-                .help("Undo (⌘Z)")
+                Divider().frame(height: 16)
 
-                StudioActionPill(title: "", systemIcon: "arrow.uturn.forward") {
-                    state.redo()
-                }
-                .opacity(state.redoStack.isEmpty ? 0.4 : 1.0)
-                .disabled(state.redoStack.isEmpty)
-                .help("Redo (⇧⌘Z)")
+                // Swatch Button & Color Swatches (boxColor)
+                HStack(spacing: 6) {
+                    ColorPicker("", selection: $state.strokeColor)
+                        .labelsHidden()
+                        .frame(width: 20, height: 20)
+                        .help("Pick custom annotation color")
 
-                StudioActionPill(title: "Clear", systemIcon: "xmark.bin") {
-                    guard !state.annotations.isEmpty else { return }
-                    state.pushUndo()
-                    state.annotations.removeAll()
-                    state.selectedItemID = nil
-                    state.counterStep = 1
-                    state.showToast("Cleared all annotations")
-                }
-                .opacity(state.annotations.isEmpty ? 0.4 : 1.0)
-                .disabled(state.annotations.isEmpty)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(
-            Capsule()
-                .fill(StudioTheme.bgDock)
-                .overlay(Capsule().stroke(StudioTheme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(0.22), radius: 12, y: 4)
-        )
-    }
-
-    // MARK: - Bottom Floating Glass Instrument Dock (All 15 Custom Vector Tools)
-    private var floatingBottomToolDock: some View {
-        HStack(spacing: 3) {
-            ForEach(ToolMode.allCases) { tool in
-                StudioIconButton(
-                    tool: tool,
-                    isSelected: state.currentTool == tool,
-                    action: {
-                        state.currentTool = tool
-                        if tool == .image {
-                            pickOverlayImage()
+                    HStack(spacing: 4) {
+                        ForEach([
+                            Color(red: 1.0, green: 0.24, blue: 0.19), // Shottr Red
+                            Color(red: 1.0, green: 0.58, blue: 0.0),  // Orange
+                            Color(red: 1.0, green: 0.84, blue: 0.04), // Yellow
+                            Color(red: 0.19, green: 0.82, blue: 0.35),// Green
+                            Color(red: 0.04, green: 0.52, blue: 1.0), // Blue
+                            Color.white
+                        ], id: \.self) { swatch in
+                            let isCur = state.strokeColor == swatch
+                            Circle()
+                                .fill(swatch)
+                                .frame(width: 14, height: 14)
+                                .overlay(Circle().stroke(isCur ? StudioTheme.textPrimary : StudioTheme.borderStrong, lineWidth: isCur ? 2 : 1))
+                                .onTapGesture {
+                                    state.strokeColor = swatch
+                                    updateSelectedAnnotation { $0.color = swatch }
+                                }
                         }
                     }
-                )
+                }
+
+                Divider().frame(height: 16)
+
+                // Stroke Width / Size Slider (sliderSize)
+                HStack(spacing: 5) {
+                    Image(systemName: "lineweight")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    Slider(value: $state.strokeWidth, in: 1.5...16)
+                        .frame(width: 68)
+                        .onChange(of: state.strokeWidth) { newVal in
+                            updateSelectedAnnotation { $0.lineWidth = newVal }
+                        }
+                    Text("\(Int(state.strokeWidth))px")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .frame(width: 26, alignment: .leading)
+                }
+
+                // Sub-options depending on selected tool
+                if state.currentTool == .arrow {
+                    Divider().frame(height: 16)
+                    StudioSegmentedPills(items: ArrowStyle.allCases, selection: $state.arrowStyle)
+                } else if state.currentTool == .rect || state.currentTool == .oval {
+                    Divider().frame(height: 16)
+                    StudioSegmentedPills(items: ShapeFillStyle.allCases, selection: $state.fillStyle)
+                } else if state.currentTool == .conceal {
+                    Divider().frame(height: 16)
+                    StudioSegmentedPills(items: ConcealMode.allCases, selection: $state.concealMode)
+                } else if state.currentTool == .text {
+                    Divider().frame(height: 16)
+                    StudioSegmentedPills(items: TextFontStyle.allCases, selection: $state.fontStyle)
+                } else if state.currentTool == .line {
+                    Divider().frame(height: 16)
+                    Toggle("Dashed", isOn: $state.isDashed)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(StudioTheme.textPrimary)
+                }
+
+                Spacer()
+
+                // Undo / Redo / Clear
+                HStack(spacing: 4) {
+                    if state.selectedItemID != nil {
+                        StudioActionPill(title: "Delete", systemIcon: "trash.fill", isPrimary: true) {
+                            state.deleteSelected()
+                        }
+                    }
+
+                    StudioActionPill(title: "", systemIcon: "arrow.uturn.backward") {
+                        state.undo()
+                    }
+                    .opacity(state.undoStack.isEmpty ? 0.4 : 1.0)
+                    .disabled(state.undoStack.isEmpty)
+                    .help("Undo (⌘Z)")
+
+                    StudioActionPill(title: "", systemIcon: "arrow.uturn.forward") {
+                        state.redo()
+                    }
+                    .opacity(state.redoStack.isEmpty ? 0.4 : 1.0)
+                    .disabled(state.redoStack.isEmpty)
+                    .help("Redo (⇧⌘Z)")
+
+                    StudioActionPill(title: "Clear", systemIcon: "xmark.bin") {
+                        guard !state.annotations.isEmpty else { return }
+                        state.pushUndo()
+                        state.annotations.removeAll()
+                        state.selectedItemID = nil
+                        state.counterStep = 1
+                        state.showToast("Cleared all annotations")
+                    }
+                    .opacity(state.annotations.isEmpty ? 0.4 : 1.0)
+                    .disabled(state.annotations.isEmpty)
+                    .help("Clear Annotations")
+                }
+                .padding(.trailing, 12)
             }
+            .frame(height: 34)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(StudioTheme.bgDock)
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(StudioTheme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(0.28), radius: 16, y: 6)
-        )
-    }
-
-    // MARK: - Zoom Control Pill
-    private var zoomControlPill: some View {
-        HStack(spacing: 4) {
-            Button(action: { state.zoomScale = max(0.25, state.zoomScale - 0.25) }) {
-                Image(systemName: "minus")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 24, height: 28)
-            }
-            .buttonStyle(.plain)
-
-            Button(action: { state.zoomScale = 1.0 }) {
-                Text("\(Int(state.zoomScale * 100))%")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .frame(width: 44)
-            }
-            .buttonStyle(.plain)
-            .help("Reset Zoom to 100% [0]")
-
-            Button(action: { state.zoomScale = min(4.0, state.zoomScale + 0.25) }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 24, height: 28)
-            }
-            .buttonStyle(.plain)
-        }
-        .foregroundColor(StudioTheme.textPrimary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(StudioTheme.bgDock)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(StudioTheme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
-        )
+        .background(StudioTheme.bgBar)
     }
 
     // MARK: - Empty Workspace Welcome View
@@ -876,7 +920,211 @@ public struct EditorView: View {
         .padding(14)
     }
 
-    // MARK: - Single-Key Shortcuts Handler
+    // MARK: - Shottr-Aligned Selection & Crop Actions
+    private func cropToSelection() {
+        guard let img = image else { return }
+        if let sel = state.selectionRect, sel.width > 8, sel.height > 8 {
+            state.pushUndo()
+            let cropped = cropImageRect(from: img, in: sel, canvasSize: img.size)
+            self.image = cropped
+            state.selectionRect = nil
+            state.showToast("Cropped to \(Int(sel.width)) × \(Int(sel.height))")
+        } else {
+            state.currentTool = .crop
+            state.showToast("Drag an area on canvas to crop")
+        }
+    }
+
+    private func autoadjustSelection() {
+        guard let sel = state.selectionRect, let img = image else { return }
+        let inset = sel.insetBy(dx: -4, dy: -4).intersection(CGRect(origin: .zero, size: img.size))
+        state.selectionRect = inset
+        state.showToast("Auto-adjusted selection")
+    }
+
+    private func resizeSelection() {
+        if let sel = state.selectionRect {
+            state.targetWidthText = "\(Int(sel.width))"
+            state.targetHeightText = "\(Int(sel.height))"
+        } else if let img = image {
+            state.targetWidthText = "\(Int(img.size.width))"
+            state.targetHeightText = "\(Int(img.size.height))"
+        }
+        state.showResizePopover = true
+    }
+
+    private func ocrSelection() {
+        guard let img = image else { return }
+        let targetImg: NSImage
+        if let sel = state.selectionRect, sel.width > 8, sel.height > 8 {
+            targetImg = cropImageRect(from: img, in: sel, canvasSize: img.size)
+        } else {
+            targetImg = img
+        }
+        let removeBreaks = UserDefaults.standard.bool(forKey: "ocrRemoveBreaks")
+        ScreenCaptureManager.shared.recognizeTextAndQR(in: targetImg, removeLineBreaks: removeBreaks) { text in
+            self.state.ocrResultText = text
+            self.state.showingOcrAlert = true
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            self.state.showToast("Copied OCR text to clipboard")
+        }
+    }
+
+    private func imprintSelectionSize() {
+        guard let sel = state.selectionRect else { return }
+        state.pushUndo()
+        let mult: CGFloat = state.showLogicalPoints ? 0.5 : 1.0
+        let unit = state.showLogicalPoints ? "pt" : "px"
+        let w = Int(round(sel.width * mult))
+        let h = Int(round(sel.height * mult))
+        let imprintItem = AnnotationItem(
+            tool: .ruler,
+            startPoint: CGPoint(x: sel.minX, y: sel.midY),
+            endPoint: CGPoint(x: sel.maxX, y: sel.midY),
+            color: state.strokeColor,
+            lineWidth: 2.0,
+            text: "\(w) × \(h) \(unit)"
+        )
+        state.annotations.append(imprintItem)
+        state.selectionRect = nil
+        state.showToast("Imprinted size: \(w) × \(h) \(unit)")
+    }
+
+    private func eraseSelection() {
+        guard let sel = state.selectionRect, let img = image else { return }
+        state.pushUndo()
+        let erased = eraseImageRect(from: img, in: sel, canvasSize: img.size)
+        self.image = erased
+        state.selectionRect = nil
+        state.showToast("Erased selection area")
+    }
+
+    private func cutOutSelection() {
+        guard let sel = state.selectionRect, let img = image else { return }
+        state.pushUndo()
+        if let spliced = cutoutImage(from: img, in: sel, canvasSize: img.size) {
+            self.image = spliced
+            state.selectionRect = nil
+            state.showToast("Cut out selection and joined pieces")
+        }
+    }
+
+    private func resetSelection() {
+        state.selectionRect = nil
+        state.showToast("Cleared selection")
+    }
+
+    private func appendImageAction() {
+        guard let cur = image else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        if panel.runModal() == .OK, let url = panel.url, let nextImg = NSImage(contentsOf: url) {
+            state.pushUndo()
+            let combined = stitchImagesVertically(top: cur, bottom: nextImg)
+            self.image = combined
+            state.showToast("Appended image below")
+        }
+    }
+
+    // MARK: - Image Processing Helpers
+    private func cropImageRect(from original: NSImage, in rect: CGRect, canvasSize: CGSize) -> NSImage {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return original }
+        let scaleX = original.size.width / canvasSize.width
+        let scaleY = original.size.height / canvasSize.height
+        let target = NSRect(
+            x: max(0, rect.minX * scaleX),
+            y: max(0, (canvasSize.height - rect.maxY) * scaleY),
+            width: min(original.size.width, rect.width * scaleX),
+            height: min(original.size.height, rect.height * scaleY)
+        )
+        guard target.width > 1, target.height > 1 else { return original }
+        let cropped = NSImage(size: target.size)
+        cropped.lockFocus()
+        original.draw(in: NSRect(origin: .zero, size: target.size), from: target, operation: .copy, fraction: 1.0)
+        cropped.unlockFocus()
+        return cropped
+    }
+
+    private func eraseImageRect(from original: NSImage, in rect: CGRect, canvasSize: CGSize) -> NSImage {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return original }
+        let scaleX = original.size.width / canvasSize.width
+        let scaleY = original.size.height / canvasSize.height
+        let target = NSRect(
+            x: max(0, rect.minX * scaleX),
+            y: max(0, (canvasSize.height - rect.maxY) * scaleY),
+            width: min(original.size.width, rect.width * scaleX),
+            height: min(original.size.height, rect.height * scaleY)
+        )
+        let erased = NSImage(size: original.size)
+        erased.lockFocus()
+        original.draw(in: NSRect(origin: .zero, size: original.size))
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.clear(target)
+        }
+        erased.unlockFocus()
+        return erased
+    }
+
+    private func cutoutImage(from original: NSImage, in rect: CGRect, canvasSize: CGSize) -> NSImage? {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return original }
+        guard let tiff = original.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let cg = bitmap.cgImage else { return original }
+
+        let scaleX = CGFloat(cg.width) / canvasSize.width
+        let scaleY = CGFloat(cg.height) / canvasSize.height
+        let targetX = rect.minX * scaleX
+        let targetY = rect.minY * scaleY
+        let targetW = rect.width * scaleX
+        let targetH = rect.height * scaleY
+
+        if targetW >= targetH {
+            // Horizontal cut out: splice top piece and bottom piece
+            let topH = max(0, targetY)
+            let bottomH = max(0, CGFloat(cg.height) - (targetY + targetH))
+            let newH = topH + bottomH
+            guard newH > 0 else { return original }
+
+            let result = NSImage(size: NSSize(width: original.size.width, height: newH / scaleY))
+            result.lockFocus()
+            let bottomCrop = NSRect(x: 0, y: 0, width: original.size.width, height: bottomH / scaleY)
+            original.draw(in: NSRect(origin: .zero, size: bottomCrop.size), from: bottomCrop, operation: .copy, fraction: 1.0)
+            let topCrop = NSRect(x: 0, y: (targetY + targetH) / scaleY, width: original.size.width, height: topH / scaleY)
+            original.draw(in: NSRect(x: 0, y: bottomH / scaleY, width: original.size.width, height: topH / scaleY), from: topCrop, operation: .copy, fraction: 1.0)
+            result.unlockFocus()
+            return result
+        } else {
+            // Vertical cut out: splice left piece and right piece
+            let leftW = max(0, targetX)
+            let rightW = max(0, CGFloat(cg.width) - (targetX + targetW))
+            let newW = leftW + rightW
+            guard newW > 0 else { return original }
+
+            let result = NSImage(size: NSSize(width: newW / scaleX, height: original.size.height))
+            result.lockFocus()
+            let leftCrop = NSRect(x: 0, y: 0, width: leftW / scaleX, height: original.size.height)
+            original.draw(in: NSRect(origin: .zero, size: leftCrop.size), from: leftCrop, operation: .copy, fraction: 1.0)
+            let rightCrop = NSRect(x: (targetX + targetW) / scaleX, y: 0, width: rightW / scaleX, height: original.size.height)
+            original.draw(in: NSRect(x: leftW / scaleX, y: 0, width: rightW / scaleX, height: original.size.height), from: rightCrop, operation: .copy, fraction: 1.0)
+            result.unlockFocus()
+            return result
+        }
+    }
+
+    private func stitchImagesVertically(top: NSImage, bottom: NSImage) -> NSImage {
+        let newWidth = max(top.size.width, bottom.size.width)
+        let newHeight = top.size.height + bottom.size.height
+        let result = NSImage(size: NSSize(width: newWidth, height: newHeight))
+        result.lockFocus()
+        top.draw(in: NSRect(x: 0, y: bottom.size.height, width: top.size.width, height: top.size.height))
+        bottom.draw(in: NSRect(x: 0, y: 0, width: bottom.size.width, height: bottom.size.height))
+        result.unlockFocus()
+        return result
+    }
+
+    // MARK: - Single-Key Shortcuts Handler (Shottr Parity)
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         if state.pendingTextPoint != nil { return false }
 
@@ -890,11 +1138,20 @@ public struct EditorView: View {
             } else if chars == "S" {
                 saveToDefaultFolder()
                 return true
+            } else if chars == "P" {
+                pinCurrentImage()
+                return true
+            } else if chars == "O" {
+                ocrSelection()
+                return true
             } else if chars == "V" {
                 loadFromClipboard()
                 return true
             } else if chars == "," {
                 NotificationCenter.default.post(name: Notification.Name("ScreenshotsOpenPreferences"), object: nil)
+                return true
+            } else if chars == "]" {
+                resizeSelection()
                 return true
             } else if chars == "Z" {
                 if flags.contains(.shift) {
@@ -903,13 +1160,30 @@ public struct EditorView: View {
                     state.undo()
                 }
                 return true
+            } else if flags.contains(.shift) && chars == "A" {
+                appendImageAction()
+                return true
             }
             return false
         }
 
-        // Delete / Backspace removes selected annotation
+        // Escape: reset selection if active, else copy and close
+        if event.keyCode == 53 {
+            if state.selectionRect != nil {
+                resetSelection()
+                return true
+            } else {
+                copyToClipboard()
+                return true
+            }
+        }
+
+        // Delete / Backspace: erase selection if active, else delete selected annotation
         if event.keyCode == 51 || event.keyCode == 117 {
-            if state.selectedItemID != nil {
+            if state.selectionRect != nil {
+                eraseSelection()
+                return true
+            } else if state.selectedItemID != nil {
                 state.deleteSelected()
                 return true
             }
@@ -923,8 +1197,26 @@ public struct EditorView: View {
 
         switch chars {
         case "V": state.currentTool = .select; return true
-        case "C": state.currentTool = .crop; return true
-        case "A": state.currentTool = .arrow; return true
+        case "C":
+            if state.selectionRect != nil {
+                cropToSelection()
+            } else {
+                state.currentTool = .crop
+            }
+            return true
+        case "X":
+            if state.selectionRect != nil {
+                cutOutSelection()
+                return true
+            }
+            return false
+        case "A":
+            if state.selectionRect != nil {
+                autoadjustSelection()
+            } else {
+                state.currentTool = .arrow
+            }
+            return true
         case "F": state.currentTool = .freehand; return true
         case "H": state.currentTool = .highlighter; return true
         case "L": state.currentTool = .line; return true
@@ -936,6 +1228,11 @@ public struct EditorView: View {
         case "M": state.currentTool = .magnifier; return true
         case "B": state.currentTool = .conceal; return true
         case "U": state.currentTool = .ruler; return true
+        case "K":
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                state.showBackdropInspector.toggle()
+            }
+            return true
         case "P":
             state.showLogicalPoints.toggle()
             state.showToast(state.showLogicalPoints ? "Logical Points (1pt = 2px)" : "Physical Pixels")
@@ -1444,6 +1741,11 @@ struct CanvasInteractiveOverlay: View {
                         sampledColor: state.hoveredColor
                     )
                 }
+
+                // Interactive Selection Rectangle Overlay (Shottr Selection / Crop / Erase / Cutout)
+                if let sel = state.selectionRect {
+                    SelectionBoxOverlay(rect: sel, canvasSize: geo.size)
+                }
             }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
@@ -1470,16 +1772,29 @@ struct CanvasInteractiveOverlay: View {
                                     state.pushUndo()
                                 } else {
                                     state.selectedItemID = nil
+                                    let minX = min(value.startLocation.x, value.location.x)
+                                    let minY = min(value.startLocation.y, value.location.y)
+                                    let width = abs(value.location.x - value.startLocation.x)
+                                    let height = abs(value.location.y - value.startLocation.y)
+                                    state.selectionRect = CGRect(x: minX, y: minY, width: width, height: height)
                                 }
-                            }
-                            if let snap = state.dragStartSnapshot,
-                               let idx = state.annotations.firstIndex(where: { $0.id == snap.id }) {
+                            } else if let snap = state.dragStartSnapshot,
+                                      let idx = state.annotations.firstIndex(where: { $0.id == snap.id }) {
                                 let dx = value.translation.width
                                 let dy = value.translation.height
                                 state.annotations[idx].startPoint = CGPoint(x: snap.startPoint.x + dx, y: snap.startPoint.y + dy)
                                 state.annotations[idx].endPoint = CGPoint(x: snap.endPoint.x + dx, y: snap.endPoint.y + dy)
                                 state.annotations[idx].points = snap.points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
                             }
+                            return
+                        }
+
+                        if state.currentTool == .crop {
+                            let minX = min(value.startLocation.x, value.location.x)
+                            let minY = min(value.startLocation.y, value.location.y)
+                            let width = abs(value.location.x - value.startLocation.x)
+                            let height = abs(value.location.y - value.startLocation.y)
+                            state.selectionRect = CGRect(x: minX, y: minY, width: width, height: height)
                             return
                         }
 
@@ -1509,6 +1824,17 @@ struct CanvasInteractiveOverlay: View {
                     .onEnded { value in
                         if state.currentTool == .select {
                             state.dragStartSnapshot = nil
+                            if let sel = state.selectionRect, sel.width < 5 && sel.height < 5 {
+                                state.selectionRect = nil
+                            }
+                            return
+                        }
+                        if state.currentTool == .crop {
+                            if let sel = state.selectionRect, sel.width > 12 && sel.height > 12 {
+                                performCrop(rect: sel, canvasSize: geo.size)
+                                state.selectionRect = nil
+                                state.currentTool = .arrow
+                            }
                             return
                         }
                         if state.currentTool == .text {
@@ -1527,11 +1853,6 @@ struct CanvasInteractiveOverlay: View {
                             state.annotations.append(item)
                             state.selectedItemID = item.id
                             state.counterStep += 1
-                            return
-                        }
-                        if state.currentTool == .crop, let active = state.activeItem {
-                            performCrop(rect: active.boundingRect, canvasSize: geo.size)
-                            state.activeItem = nil
                             return
                         }
                         if var item = state.activeItem {
@@ -1794,6 +2115,9 @@ struct CanvasInteractiveOverlay: View {
                 .stroke(Color.white.opacity(0.65), lineWidth: 1.5)
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
+
+        case .backdrop, .append:
+            EmptyView()
         }
     }
 }
@@ -2038,5 +2362,45 @@ struct ArrowShape: Shape {
         }
 
         return path
+    }
+}
+
+// MARK: - Shottr Interactive Selection Box Overlay
+struct SelectionBoxOverlay: View {
+    let rect: CGRect
+    let canvasSize: CGSize
+    @ObservedObject private var theme = ThemeManager.shared
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // Semi-transparent blue/accent selection tint
+            Rectangle()
+                .fill(StudioTheme.accent.opacity(0.12))
+                .frame(width: max(0, rect.width), height: max(0, rect.height))
+                .position(x: rect.midX, y: rect.midY)
+
+            // High-contrast dashed border (white + accent marching ants)
+            Rectangle()
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                .frame(width: max(0, rect.width), height: max(0, rect.height))
+                .position(x: rect.midX, y: rect.midY)
+
+            Rectangle()
+                .stroke(StudioTheme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4], dashPhase: 5))
+                .frame(width: max(0, rect.width), height: max(0, rect.height))
+                .position(x: rect.midX, y: rect.midY)
+
+            // Dimension callout badge
+            if rect.width > 24 && rect.height > 14 {
+                Text("\(Int(rect.width)) × \(Int(rect.height)) px")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.black.opacity(0.85)))
+                    .overlay(Capsule().stroke(StudioTheme.borderStrong, lineWidth: 1))
+                    .position(x: rect.midX, y: max(12, rect.minY - 12))
+            }
+        }
     }
 }

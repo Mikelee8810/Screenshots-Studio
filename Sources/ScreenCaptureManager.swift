@@ -17,7 +17,7 @@ public class ScreenCaptureManager {
         let tempPath = "/tmp/screenshots_area_\(UUID().uuidString).png"
         let task = Process()
         task.launchPath = "/usr/sbin/screencapture"
-        task.arguments = ["-i", "-r", tempPath]
+        task.arguments = ["-i", tempPath]
 
         task.terminationHandler = { _ in
             DispatchQueue.main.async {

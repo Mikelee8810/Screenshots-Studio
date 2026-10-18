@@ -186,48 +186,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         let fullItem = NSMenuItem(title: "Fullscreen Screenshot", action: #selector(captureFullscreenAction), keyEquivalent: "1")
-        fullItem.keyEquivalentModifierMask = [.control, .shift]
+        fullItem.keyEquivalentModifierMask = [.command, .shift]
         fullItem.image = NSImage(systemSymbolName: "display", accessibilityDescription: nil)
         menu.addItem(fullItem)
 
-        let areaItem = NSMenuItem(title: "Area Screenshot", action: #selector(captureAreaAction), keyEquivalent: "2")
-        areaItem.keyEquivalentModifierMask = [.control, .shift]
+        let areaItem = NSMenuItem(title: "Area Screenshot", action: #selector(captureAreaAction), keyEquivalent: "4")
+        areaItem.keyEquivalentModifierMask = [.command, .shift]
         areaItem.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
         menu.addItem(areaItem)
 
         let repeatAreaItem = NSMenuItem(title: "Repeat Area Capture", action: #selector(captureRepeatAreaAction), keyEquivalent: "r")
-        repeatAreaItem.keyEquivalentModifierMask = [.control, .shift]
+        repeatAreaItem.keyEquivalentModifierMask = [.command, .shift]
         repeatAreaItem.image = NSImage(systemSymbolName: "arrow.clockwise.square", accessibilityDescription: nil)
         menu.addItem(repeatAreaItem)
 
         let anyWinItem = NSMenuItem(title: "Capture Any Window", action: #selector(captureAnyWindowAction), keyEquivalent: "w")
-        anyWinItem.keyEquivalentModifierMask = [.control, .shift]
+        anyWinItem.keyEquivalentModifierMask = [.command, .shift]
         anyWinItem.image = NSImage(systemSymbolName: "macwindow.badge.plus", accessibilityDescription: nil)
         menu.addItem(anyWinItem)
 
         let activeWinItem = NSMenuItem(title: "Capture Active Window", action: #selector(captureActiveWindowAction), keyEquivalent: "a")
-        activeWinItem.keyEquivalentModifierMask = [.control, .shift]
+        activeWinItem.keyEquivalentModifierMask = [.command, .shift]
         activeWinItem.image = NSImage(systemSymbolName: "uiwindow.split.2x1", accessibilityDescription: nil)
         menu.addItem(activeWinItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let scrollDownItem = NSMenuItem(title: "Scrolling Capture (Down)", action: #selector(captureScrollingDownAction), keyEquivalent: "3")
-        scrollDownItem.keyEquivalentModifierMask = [.control, .shift]
+        let scrollDownItem = NSMenuItem(title: "Scrolling Capture (Down)", action: #selector(captureScrollingDownAction), keyEquivalent: "5")
+        scrollDownItem.keyEquivalentModifierMask = [.option, .shift]
         scrollDownItem.image = NSImage(systemSymbolName: "arrow.up.and.down.text.horizontal", accessibilityDescription: nil)
         menu.addItem(scrollDownItem)
 
         let scrollUpItem = NSMenuItem(title: "Reverse Scrolling Capture (Up)", action: #selector(captureScrollingUpAction), keyEquivalent: "4")
-        scrollUpItem.keyEquivalentModifierMask = [.control, .shift]
+        scrollUpItem.keyEquivalentModifierMask = [.option, .shift]
         scrollUpItem.image = NSImage(systemSymbolName: "arrow.up.doc", accessibilityDescription: nil)
         menu.addItem(scrollUpItem)
 
         let delayedItem = NSMenuItem(title: "Delayed Screenshot (3s)", action: #selector(captureDelayedAction), keyEquivalent: "d")
-        delayedItem.keyEquivalentModifierMask = [.control, .shift]
+        delayedItem.keyEquivalentModifierMask = [.command, .shift]
         delayedItem.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
         menu.addItem(delayedItem)
 
         let recordItem = NSMenuItem(title: ScreenRecorder.shared.isRecording ? "Stop Screen Recording" : "Start Screen Recording", action: #selector(toggleRecordingAction), keyEquivalent: "5")
+        recordItem.keyEquivalentModifierMask = [.control, .shift]
         recordItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
         menu.addItem(recordItem)
         recordMenuItem = recordItem
@@ -239,12 +240,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         let ocrItem = NSMenuItem(title: "Recognize Text / QR Code", action: #selector(captureOCRAction), keyEquivalent: "o")
-        ocrItem.keyEquivalentModifierMask = [.control, .shift]
+        ocrItem.keyEquivalentModifierMask = [.control, .option, .command]
         ocrItem.image = NSImage(systemSymbolName: "qrcode.viewfinder", accessibilityDescription: nil)
         menu.addItem(ocrItem)
 
         let clipboardItem = NSMenuItem(title: "Load From Clipboard", action: #selector(loadClipboardAction), keyEquivalent: "v")
-        clipboardItem.keyEquivalentModifierMask = [.control, .shift]
+        clipboardItem.keyEquivalentModifierMask = [.command]
         clipboardItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
         menu.addItem(clipboardItem)
 
@@ -265,7 +266,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handlePostCapture(_ image: NSImage?) {
-        guard let image = image else { return }
+        guard let image = image else {
+            if self.capturedImage != nil {
+                DispatchQueue.main.async {
+                    self.editorWindow?.makeKeyAndOrderFront(nil)
+                }
+            }
+            return
+        }
 
         if UserDefaults.standard.object(forKey: "afterGrabCopy") == nil || UserDefaults.standard.bool(forKey: "afterGrabCopy") {
             let pb = NSPasteboard.general
