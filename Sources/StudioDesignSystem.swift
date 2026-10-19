@@ -7,8 +7,8 @@ public final class ThemeManager: ObservableObject {
     public static let shared = ThemeManager()
 
     @Published public var mode: AppearanceMode = {
-        let raw = UserDefaults.standard.string(forKey: "appearanceMode") ?? AppearanceMode.dark.rawValue
-        return AppearanceMode(rawValue: raw) ?? .dark
+        let raw = UserDefaults.standard.string(forKey: "appearanceMode") ?? AppearanceMode.light.rawValue
+        return AppearanceMode(rawValue: raw) ?? .light
     }() {
         didSet {
             UserDefaults.standard.set(mode.rawValue, forKey: "appearanceMode")
@@ -16,7 +16,7 @@ public final class ThemeManager: ObservableObject {
         }
     }
 
-    @Published public var isDark: Bool = true
+    @Published public var isDark: Bool = false
 
     private init() {
         applyWindowAppearance()
