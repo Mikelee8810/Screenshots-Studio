@@ -150,27 +150,27 @@ public class ScreenCaptureManager {
         }
     }
 
-    // MARK: - 7. Scrolling Capture (Auto-scroll + Vertical Image Stitcher)
-    public func captureScrollingArea(reverseDirection: Bool = false, steps: Int = 5, completion: @escaping (NSImage?) -> Void) {
+    // MARK: - 7. Scrolling Capture (Auto-scroll + VisionStitcher Registration)
+    public func captureScrollingArea(reverseDirection: Bool = false, steps: Int = 6, completion: @escaping (NSImage?) -> Void) {
         captureInteractiveArea { firstImage in
             guard let first = firstImage else {
                 completion(nil)
                 return
             }
             guard let rect = self.lastCapturedAreaRect else {
-                // If macOS didn't write xattr rect, return the captured image directly
                 completion(first)
                 return
             }
 
             var frames: [NSImage] = [first]
             let group = DispatchGroup()
+            let scrollCenter = CGPoint(x: rect.midX, y: rect.midY)
 
             for stepIndex in 1..<steps {
                 group.enter()
-                DispatchQueue.main.asyncAfter(deadline: .now() + Double(stepIndex) * 0.45) {
-                    self.postScrollEvent(lines: reverseDirection ? 6 : -6)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(stepIndex) * 0.50) {
+                    self.postScrollEvent(lines: reverseDirection ? 8 : -8, at: scrollCenter)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
                         self.captureRepeatArea { nextImg in
                             if let nextImg = nextImg {
                                 frames.append(nextImg)
@@ -182,43 +182,97 @@ public class ScreenCaptureManager {
             }
 
             group.notify(queue: .main) {
-                let stitched = self.stitchVerticalFrames(frames)
+                let stitched = self.stitchVisionFrames(frames, reverse: reverseDirection)
                 completion(stitched ?? first)
             }
         }
     }
 
-    private func postScrollEvent(lines: Int32) {
+    private func postScrollEvent(lines: Int32, at point: CGPoint? = nil) {
+        let targetPoint = point ?? lastCapturedAreaRect.map { CGPoint(x: $0.midX, y: $0.midY) } ?? .zero
         if let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) {
+            scrollEvent.location = targetPoint
             scrollEvent.post(tap: .cghidEventTap)
         }
     }
 
-    private func stitchVerticalFrames(_ images: [NSImage]) -> NSImage? {
-        guard !images.isEmpty else { return nil }
-        if images.count == 1 { return images.first }
+    // Vision-based translational image alignment (Shottr VisionStitcher engine)
+    private func stitchVisionFrames(_ frames: [NSImage], reverse: Bool = false) -> NSImage? {
+        guard !frames.isEmpty else { return nil }
+        guard frames.count > 1 else { return frames.first }
 
-        let width = images[0].size.width
-        let sliceHeight = images[0].size.height * 0.75
-        let totalHeight = images[0].size.height + CGFloat(images.count - 1) * sliceHeight
-
-        let finalImage = NSImage(size: NSSize(width: width, height: totalHeight))
-        finalImage.lockFocus()
-        var currentY = totalHeight - images[0].size.height
-        images[0].draw(in: NSRect(x: 0, y: currentY, width: width, height: images[0].size.height))
-
-        for idx in 1..<images.count {
-            currentY -= sliceHeight
-            let img = images[idx]
-            img.draw(
-                in: NSRect(x: 0, y: currentY, width: width, height: sliceHeight),
-                from: NSRect(x: 0, y: 0, width: img.size.width, height: sliceHeight),
-                operation: .sourceOver,
-                fraction: 1.0
-            )
+        var reps: [NSBitmapImageRep] = []
+        for f in frames {
+            guard let tiff = f.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff) else { return nil }
+            reps.append(rep)
         }
-        finalImage.unlockFocus()
-        return finalImage
+
+        let w = reps[0].pixelsWide
+        let frameH = reps[0].pixelsHigh
+        let rowBytes = w * 4
+
+        var shifts: [Int] = []
+
+        for i in 1..<frames.count {
+            guard let tiff1 = frames[i - 1].tiffRepresentation, let ci1 = CIImage(data: tiff1),
+                  let tiff2 = frames[i].tiffRepresentation, let ci2 = CIImage(data: tiff2) else { continue }
+
+            let req = VNTranslationalImageRegistrationRequest(targetedCIImage: ci2)
+            let handler = VNImageRequestHandler(ciImage: ci1, options: [:])
+            do {
+                try handler.perform([req])
+                guard let obs = req.results?.first as? VNImageTranslationAlignmentObservation else { continue }
+                let shiftY = Int(round(abs(obs.alignmentTransform.ty)))
+                if shiftY > 5 && shiftY < Int(Double(frameH) * 0.95) {
+                    shifts.append(shiftY)
+                }
+            } catch {
+                NSLog("VisionStitcher registration error: \(error)")
+            }
+        }
+
+        guard !shifts.isEmpty else { return frames.first }
+
+        let totalH = frameH + shifts.reduce(0, +)
+
+        guard let outRep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: w,
+            pixelsHigh: totalH,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: rowBytes,
+            bitsPerPixel: 32
+        ), let dstPtr = outRep.bitmapData else { return nil }
+
+        // Copy top initial frame
+        if let src0 = reps[0].bitmapData {
+            memcpy(dstPtr, src0, frameH * rowBytes)
+        }
+
+        // Seamlessly stitch newly revealed rows
+        var currentOffsetRows = frameH
+        for i in 0..<shifts.count {
+            let shift = shifts[i]
+            let nextRep = reps[i + 1]
+            guard let nextSrc = nextRep.bitmapData else { continue }
+
+            let srcOffset = (frameH - shift) * rowBytes
+            let dstOffset = currentOffsetRows * rowBytes
+            memcpy(dstPtr + dstOffset, nextSrc + srcOffset, shift * rowBytes)
+            currentOffsetRows += shift
+        }
+
+        let result = NSImage(size: NSSize(
+            width: frames[0].size.width,
+            height: frames[0].size.height * CGFloat(totalH) / CGFloat(frameH)
+        ))
+        result.addRepresentation(outRep)
+        return result
     }
 
     // MARK: - 8. Recognize Text & QR / Barcodes (Shottr OCR + QR Engine)
@@ -371,10 +425,12 @@ public class ScreenCaptureManager {
             getxattr(path, attrName, ptr.baseAddress, length, 0, 0)
         }
         guard result >= 0,
-              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [CGFloat],
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [AnyObject],
               plist.count == 4 else {
             return nil
         }
-        return CGRect(x: plist[0], y: plist[1], width: plist[2], height: plist[3])
+        let nums = plist.compactMap { ($0 as? NSNumber)?.doubleValue }
+        guard nums.count == 4 else { return nil }
+        return CGRect(x: CGFloat(nums[0]), y: CGFloat(nums[1]), width: CGFloat(nums[2]), height: CGFloat(nums[3]))
     }
 }
