@@ -790,3 +790,139 @@ struct MiniSnakeGameView: View {
         }
     }
 }
+
+// MARK: - 5. Scrolling Capture Floating HUD & Cancel Controller (Shottr WinNotifier parity)
+
+public class ScrollingHUDManager: ObservableObject {
+    public static let shared = ScrollingHUDManager()
+
+    private var hudWindow: NSWindow?
+    private var globalKeyMonitor: Any?
+    private var localKeyMonitor: Any?
+    private var onStopCallback: (() -> Void)?
+
+    @Published public var currentStep: Int = 1
+    @Published public var maxSteps: Int = 20
+
+    public func showHUD(near rect: CGRect, maxSteps: Int, onStop: @escaping () -> Void) {
+        dismissHUD()
+        self.onStopCallback = onStop
+        self.currentStep = 1
+        self.maxSteps = maxSteps
+
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let hudWidth: CGFloat = 340
+        let hudHeight: CGFloat = 52
+        let x = max(screen.minX + 20, min(screen.maxX - hudWidth - 20, rect.midX - hudWidth / 2))
+        let y = min(screen.maxY - hudHeight - 16, max(screen.minY + 20, rect.maxY + 14))
+
+        let window = NSWindow(
+            contentRect: NSRect(x: x, y: y, width: hudWidth, height: hudHeight),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.level = .floating
+        window.hasShadow = true
+        window.isReleasedWhenClosed = false
+
+        let view = ScrollingHUDView(onStop: { [weak self] in
+            self?.triggerStop()
+        })
+        window.contentView = NSHostingView(rootView: view)
+        window.orderFrontRegardless()
+        self.hudWindow = window
+
+        // Global key monitor for Escape key (keyCode 53)
+        self.globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            if event.keyCode == 53 {
+                self?.triggerStop()
+            }
+        }
+        self.localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            if event.keyCode == 53 {
+                self?.triggerStop()
+                return nil
+            }
+            return event
+        }
+    }
+
+    public func updateStep(_ step: Int) {
+        DispatchQueue.main.async {
+            self.currentStep = step
+        }
+    }
+
+    public func triggerStop() {
+        DispatchQueue.main.async {
+            let cb = self.onStopCallback
+            self.dismissHUD()
+            cb?()
+        }
+    }
+
+    public func dismissHUD() {
+        if let gm = globalKeyMonitor {
+            NSEvent.removeMonitor(gm)
+            self.globalKeyMonitor = nil
+        }
+        if let lm = localKeyMonitor {
+            NSEvent.removeMonitor(lm)
+            self.localKeyMonitor = nil
+        }
+        self.hudWindow?.orderOut(nil)
+        self.hudWindow = nil
+        self.onStopCallback = nil
+    }
+}
+
+public struct ScrollingHUDView: View {
+    @ObservedObject var hud = ScrollingHUDManager.shared
+    let onStop: () -> Void
+
+    public var body: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(Color(red: 1.0, green: 0.24, blue: 0.19))
+                .frame(width: 10, height: 10)
+                .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1.5))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Scrolling Capture • Frame \(hud.currentStep)/\(hud.maxSteps)")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white)
+                Text("Press ESC or click Done to finish")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color.white.opacity(0.78))
+            }
+
+            Spacer()
+
+            Button(action: onStop) {
+                HStack(spacing: 5) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 9))
+                    Text("Done")
+                        .font(.system(size: 11.5, weight: .bold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color(red: 1.0, green: 0.24, blue: 0.19)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(Color(red: 0.10, green: 0.11, blue: 0.14).opacity(0.96))
+                .overlay(Capsule().stroke(Color.white.opacity(0.22), lineWidth: 1))
+        )
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+    }
+}
+

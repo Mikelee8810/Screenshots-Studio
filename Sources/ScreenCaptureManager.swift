@@ -182,8 +182,8 @@ public class ScreenCaptureManager {
         }
     }
 
-    // MARK: - 7. Scrolling Capture (VisionStitcher + PixelStrip Engine)
-    public func captureScrollingArea(reverseDirection: Bool = false, maxSteps: Int = 18, completion: @escaping (NSImage?) -> Void) {
+    // MARK: - 7. Scrolling Capture (VisionStitcher Incremental SAD Engine + HUD)
+    public func captureScrollingArea(reverseDirection: Bool = false, maxSteps: Int = 22, completion: @escaping (NSImage?) -> Void) {
         // Ensure Accessibility and Automation permissions are present
         if !PermissionManager.shared.checkAccessibility() {
             let alert = NSAlert()
@@ -200,27 +200,98 @@ public class ScreenCaptureManager {
         }
 
         captureInteractiveArea { firstImage in
-            guard let first = firstImage, let rect = self.lastCapturedAreaRect else {
+            guard let first = firstImage, let rect = self.lastCapturedAreaRect,
+                  let firstTiff = first.tiffRepresentation,
+                  let firstRep = NSBitmapImageRep(data: firstTiff) else {
                 completion(firstImage)
                 return
             }
 
-            var frames: [NSImage] = [first]
             let scrollCenter = CGPoint(x: rect.midX, y: rect.midY)
             let delta: Int32 = reverseDirection ? 6 : -6
-            var consecutiveZeroShifts = 0
 
-            // Step loop: warp cursor -> scroll -> wait -> capture -> measure shift -> terminate or continue
-            func performStep(index: Int) {
-                if index >= maxSteps || consecutiveZeroShifts >= 2 {
-                    DispatchQueue.main.async {
-                        let stitched = self.stitchVisionFrames(frames, reverse: reverseDirection)
-                        completion(stitched ?? first)
+            let w = firstRep.pixelsWide
+            let frameH = firstRep.pixelsHigh
+            let rowBytes = firstRep.bytesPerRow
+
+            // Dynamic buffer supporting up to maxSteps stitched frames
+            let maxTotalH = frameH * (maxSteps + 1)
+            guard let canvasRep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: w,
+                pixelsHigh: maxTotalH,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: rowBytes,
+                bitsPerPixel: 32
+            ), let canvasPtr = canvasRep.bitmapData,
+               let firstPtr = firstRep.bitmapData else {
+                completion(first)
+                return
+            }
+
+            // Copy initial frame
+            memcpy(canvasPtr, firstPtr, frameH * rowBytes)
+            var currentStitchedHeight = frameH
+            var lastRep = firstRep
+            var consecutiveZeroShifts = 0
+            var isStopped = false
+
+            func finalize() {
+                guard !isStopped else { return }
+                isStopped = true
+                ScrollingHUDManager.shared.dismissHUD()
+
+                DispatchQueue.main.async {
+                    guard currentStitchedHeight > frameH else {
+                        completion(first)
+                        return
                     }
+
+                    guard let finalRep = NSBitmapImageRep(
+                        bitmapDataPlanes: nil,
+                        pixelsWide: w,
+                        pixelsHigh: currentStitchedHeight,
+                        bitsPerSample: 8,
+                        samplesPerPixel: 4,
+                        hasAlpha: true,
+                        isPlanar: false,
+                        colorSpaceName: .deviceRGB,
+                        bytesPerRow: rowBytes,
+                        bitsPerPixel: 32
+                    ), let finalDst = finalRep.bitmapData else {
+                        completion(first)
+                        return
+                    }
+
+                    memcpy(finalDst, canvasPtr, currentStitchedHeight * rowBytes)
+
+                    let finalImg = NSImage(size: NSSize(
+                        width: first.size.width,
+                        height: first.size.height * CGFloat(currentStitchedHeight) / CGFloat(frameH)
+                    ))
+                    finalImg.addRepresentation(finalRep)
+                    completion(finalImg)
+                }
+            }
+
+            // Show floating HUD with ESC & click-to-finish support
+            DispatchQueue.main.async {
+                ScrollingHUDManager.shared.showHUD(near: rect, maxSteps: maxSteps) {
+                    finalize()
+                }
+            }
+
+            func performStep(index: Int) {
+                if index >= maxSteps || consecutiveZeroShifts >= 2 || isStopped {
+                    finalize()
                     return
                 }
 
-                // 1. Physically position the hardware cursor inside the capture area
+                // 1. Warp hardware mouse cursor into the capture area
                 CGWarpMouseCursorPosition(scrollCenter)
 
                 // 2. Post scroll wheel events (line + pixel)
@@ -231,22 +302,34 @@ public class ScreenCaptureManager {
                     self.postKeyboardScroll(reverse: reverseDirection)
                 }
 
-                // 4. Give the target window 350ms to finish scrolling and paint content
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                // 4. Wait for smooth scroll animation and DOM render
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
+                    if isStopped { return }
                     self.captureRegionDirect(rect: rect) { nextImg in
-                        guard let nextImg = nextImg else {
+                        if isStopped { return }
+                        guard let nextImg = nextImg,
+                              let nextTiff = nextImg.tiffRepresentation,
+                              let nextRep = NSBitmapImageRep(data: nextTiff),
+                              let nextPtr = nextRep.bitmapData else {
                             performStep(index: index + 1)
                             return
                         }
 
-                        // Measure shift between current last frame and newly captured frame
-                        if let lastFrame = frames.last,
-                           let shift = self.calculateShiftBetween(f1: lastFrame, f2: nextImg) {
-                            if shift > 3 {
-                                frames.append(nextImg)
+                        // Calculate exact 1D SAD vertical shift down to 1 pixel
+                        if let shift = self.findExactShift(f1: lastRep, f2: nextRep), shift > 5 {
+                            let newRows = shift
+                            let srcOffset = (frameH - newRows) * rowBytes
+                            let dstOffset = currentStitchedHeight * rowBytes
+
+                            if (currentStitchedHeight + newRows) <= maxTotalH {
+                                memcpy(canvasPtr + dstOffset, nextPtr + srcOffset, newRows * rowBytes)
+                                currentStitchedHeight += newRows
+                                lastRep = nextRep
                                 consecutiveZeroShifts = 0
+                                ScrollingHUDManager.shared.updateStep(index + 1)
                             } else {
-                                consecutiveZeroShifts += 1
+                                finalize()
+                                return
                             }
                         } else {
                             consecutiveZeroShifts += 1
@@ -278,140 +361,96 @@ public class ScreenCaptureManager {
     }
 
     private func postKeyboardScroll(reverse: Bool) {
-        // Key code 125 = Down Arrow, Key code 126 = Up Arrow
         let keyCode = reverse ? 126 : 125
         let script = NSAppleScript(source: "tell application \"System Events\" to key code \(keyCode)")
         var err: NSDictionary?
         script?.executeAndReturnError(&err)
     }
 
-    // Measure vertical shift between two frames using Apple Vision + Pixel Strip matching fallback
-    private func calculateShiftBetween(f1: NSImage, f2: NSImage) -> Int? {
-        guard let t1 = f1.tiffRepresentation, let ci1 = CIImage(data: t1),
-              let t2 = f2.tiffRepresentation, let ci2 = CIImage(data: t2) else { return nil }
+    // High-precision Sum of Absolute Differences (SAD) with 1-pixel refinement (Shottr overlayShiftStamp parity)
+    private func findExactShift(f1: NSBitmapImageRep, f2: NSBitmapImageRep) -> Int? {
+        let w = f1.pixelsWide
+        let h = f1.pixelsHigh
+        guard f2.pixelsWide == w && f2.pixelsHigh == h else { return nil }
 
-        // Method 1: Apple Vision translational registration
-        let req = VNTranslationalImageRegistrationRequest(targetedCIImage: ci2)
-        let handler = VNImageRequestHandler(ciImage: ci1, options: [:])
-        if (try? handler.perform([req])) != nil,
-           let obs = req.results?.first as? VNImageTranslationAlignmentObservation {
-            let shiftY = Int(round(abs(obs.alignmentTransform.ty)))
-            let frameH = Int(ci1.extent.height)
-            if shiftY > 5 && shiftY < Int(Double(frameH) * 0.95) {
-                return shiftY
-            }
-        }
+        guard let p1 = f1.bitmapData, let p2 = f2.bitmapData else { return nil }
+        let rowBytes = f1.bytesPerRow
 
-        // Method 2: Raw pixel strip template search fallback (Shottr overlayShiftStamp)
-        guard let r1 = NSBitmapImageRep(data: t1), let r2 = NSBitmapImageRep(data: t2) else { return nil }
-        return findPixelStripShift(prev: r1, next: r2)
-    }
+        let overlapH = min(h / 3, 260)
+        guard overlapH > 30 else { return nil }
 
-    // Fast pixel strip template matching
-    private func findPixelStripShift(prev: NSBitmapImageRep, next: NSBitmapImageRep) -> Int? {
-        let w = prev.pixelsWide
-        let h = prev.pixelsHigh
-        guard next.pixelsWide == w && next.pixelsHigh == h && h > 100 else { return nil }
-
-        guard let p1 = prev.bitmapData, let p2 = next.bitmapData else { return nil }
-        let rowBytes = prev.bytesPerRow
-
-        let sampleH = 20
-        let sampleStartPrev = max(10, h - 100)
         var bestShift: Int? = nil
-        var minDiff = Int.max
+        var minSad = Double.greatestFiniteMagnitude
 
-        for candidateY in stride(from: 0, to: sampleStartPrev, by: 2) {
-            var diff = 0
-            let xStep = max(1, w / 16)
-            for r in 0..<sampleH {
-                let row1 = (sampleStartPrev + r) * rowBytes
-                let row2 = (candidateY + r) * rowBytes
-                for col in stride(from: 0, to: w, by: xStep) {
-                    let off1 = row1 + col * 4
-                    let off2 = row2 + col * 4
-                    let dr = Int(p1[off1]) - Int(p2[off2])
-                    let dg = Int(p1[off1 + 1]) - Int(p2[off2 + 1])
-                    let db = Int(p1[off1 + 2]) - Int(p2[off2 + 2])
-                    diff += abs(dr) + abs(dg) + abs(db)
+        let maxShift = h - overlapH - 8
+        guard maxShift > 10 else { return nil }
+
+        let xStep = max(1, w / 32)
+        let yStep = 2
+
+        for s in stride(from: 10, to: maxShift, by: 2) {
+            var totalDiff: Int64 = 0
+            var samples = 0
+
+            for y in stride(from: 0, to: overlapH, by: yStep) {
+                let row1Offset = (y + s) * rowBytes
+                let row2Offset = y * rowBytes
+
+                for x in stride(from: 12, to: w - 12, by: xStep) {
+                    let off1 = row1Offset + x * 4
+                    let off2 = row2Offset + x * 4
+
+                    let dr = abs(Int(p1[off1]) - Int(p2[off2]))
+                    let dg = abs(Int(p1[off1 + 1]) - Int(p2[off2 + 1]))
+                    let db = abs(Int(p1[off1 + 2]) - Int(p2[off2 + 2]))
+                    totalDiff += Int64(dr + dg + db)
+                    samples += 1
                 }
             }
-            if diff < minDiff {
-                minDiff = diff
-                bestShift = sampleStartPrev - candidateY
+
+            let meanSad = Double(totalDiff) / Double(max(1, samples))
+            if meanSad < minSad {
+                minSad = meanSad
+                bestShift = s
             }
         }
 
-        let totalSamples = sampleH * 16
-        if let shift = bestShift, (minDiff / max(1, totalSamples)) < 28, shift > 4 {
-            return shift
+        // Single-pixel refinement step in [best - 1, best + 1]
+        if let best = bestShift, minSad < 22.0 {
+            var refinedShift = best
+            var refinedMin = minSad
+
+            for candidate in [best - 1, best + 1] {
+                if candidate < 8 || candidate > maxShift { continue }
+                var totalDiff: Int64 = 0
+                var samples = 0
+
+                for y in stride(from: 0, to: overlapH, by: 1) {
+                    let row1Offset = (y + candidate) * rowBytes
+                    let row2Offset = y * rowBytes
+
+                    for x in stride(from: 12, to: w - 12, by: xStep) {
+                        let off1 = row1Offset + x * 4
+                        let off2 = row2Offset + x * 4
+
+                        let dr = abs(Int(p1[off1]) - Int(p2[off2]))
+                        let dg = abs(Int(p1[off1 + 1]) - Int(p2[off2 + 1]))
+                        let db = abs(Int(p1[off1 + 2]) - Int(p2[off2 + 2]))
+                        totalDiff += Int64(dr + dg + db)
+                        samples += 1
+                    }
+                }
+
+                let mean = Double(totalDiff) / Double(max(1, samples))
+                if mean < refinedMin {
+                    refinedMin = mean
+                    refinedShift = candidate
+                }
+            }
+            return refinedShift
         }
+
         return nil
-    }
-
-    // Vision-based translational image alignment & raw stitch
-    private func stitchVisionFrames(_ frames: [NSImage], reverse: Bool = false) -> NSImage? {
-        guard !frames.isEmpty else { return nil }
-        guard frames.count > 1 else { return frames.first }
-
-        var reps: [NSBitmapImageRep] = []
-        for f in frames {
-            guard let tiff = f.tiffRepresentation,
-                  let rep = NSBitmapImageRep(data: tiff) else { return nil }
-            reps.append(rep)
-        }
-
-        let w = reps[0].pixelsWide
-        let frameH = reps[0].pixelsHigh
-        let rowBytes = w * 4
-
-        var pairs: [(shift: Int, rep: NSBitmapImageRep)] = []
-
-        for i in 1..<frames.count {
-            if let shift = calculateShiftBetween(f1: frames[i - 1], f2: frames[i]),
-               shift > 4 && shift < Int(Double(frameH) * 0.95) {
-                pairs.append((shift: shift, rep: reps[i]))
-            }
-        }
-
-        guard !pairs.isEmpty else { return frames.first }
-
-        let totalH = frameH + pairs.reduce(0) { $0 + $1.shift }
-
-        guard let outRep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: w,
-            pixelsHigh: totalH,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: rowBytes,
-            bitsPerPixel: 32
-        ), let dstPtr = outRep.bitmapData else { return nil }
-
-        // Copy initial frame
-        if let src0 = reps[0].bitmapData {
-            memcpy(dstPtr, src0, frameH * rowBytes)
-        }
-
-        // Seamlessly stitch newly revealed rows
-        var currentOffsetRows = frameH
-        for pair in pairs {
-            guard let nextSrc = pair.rep.bitmapData else { continue }
-            let srcOffset = (frameH - pair.shift) * rowBytes
-            let dstOffset = currentOffsetRows * rowBytes
-            memcpy(dstPtr + dstOffset, nextSrc + srcOffset, pair.shift * rowBytes)
-            currentOffsetRows += pair.shift
-        }
-
-        let result = NSImage(size: NSSize(
-            width: frames[0].size.width,
-            height: frames[0].size.height * CGFloat(totalH) / CGFloat(frameH)
-        ))
-        result.addRepresentation(outRep)
-        return result
     }
 
     // MARK: - 8. Recognize Text & QR / Barcodes (Shottr OCR + QR Engine)
