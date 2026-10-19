@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import CoreImage
 import Vision
+import ScreenCaptureKit
 
 public class ScreenCaptureManager {
     public static let shared = ScreenCaptureManager()
@@ -36,18 +37,41 @@ public class ScreenCaptureManager {
         try? task.run()
     }
 
-    // MARK: - 2. Repeat Last Area Capture (Shottr Repeat Area Capture)
-    public func captureRepeatArea(completion: @escaping (NSImage?) -> Void) {
-        guard let rect = lastCapturedAreaRect else {
-            captureInteractiveArea(completion: completion)
-            return
+    // MARK: - 2. Repeat Last Area Capture (Instant In-Memory ScreenCaptureKit Engine)
+    public func captureRegionDirect(rect: CGRect, completion: @escaping (NSImage?) -> Void) {
+        if #available(macOS 14.0, *) {
+            Task {
+                do {
+                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                    guard let display = content.displays.first else { throw NSError(domain: "SCK", code: -1) }
+                    let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+
+                    let filter = SCContentFilter(display: display, excludingWindows: [])
+                    let config = SCStreamConfiguration()
+                    config.sourceRect = rect
+                    config.width = max(1, Int(rect.width * scale))
+                    config.height = max(1, Int(rect.height * scale))
+                    config.showsCursor = false
+
+                    let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                    let img = NSImage(cgImage: cgImage, size: rect.size)
+                    DispatchQueue.main.async { completion(img) }
+                    return
+                } catch {
+                    self.captureRegionFallback(rect: rect, completion: completion)
+                }
+            }
+        } else {
+            captureRegionFallback(rect: rect, completion: completion)
         }
+    }
+
+    private func captureRegionFallback(rect: CGRect, completion: @escaping (NSImage?) -> Void) {
         let tempPath = "/tmp/screenshots_repeat_\(UUID().uuidString).png"
         let rectString = "\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.width)),\(Int(rect.height))"
         let task = Process()
         task.launchPath = "/usr/sbin/screencapture"
         task.arguments = ["-R", rectString, tempPath]
-
         task.terminationHandler = { _ in
             DispatchQueue.main.async {
                 if FileManager.default.fileExists(atPath: tempPath),
@@ -60,6 +84,14 @@ public class ScreenCaptureManager {
             }
         }
         try? task.run()
+    }
+
+    public func captureRepeatArea(completion: @escaping (NSImage?) -> Void) {
+        guard let rect = lastCapturedAreaRect else {
+            captureInteractiveArea(completion: completion)
+            return
+        }
+        captureRegionDirect(rect: rect, completion: completion)
     }
 
     // MARK: - 3. Fullscreen Capture
@@ -150,53 +182,174 @@ public class ScreenCaptureManager {
         }
     }
 
-    // MARK: - 7. Scrolling Capture (Auto-scroll + VisionStitcher Registration)
-    public func captureScrollingArea(reverseDirection: Bool = false, steps: Int = 6, completion: @escaping (NSImage?) -> Void) {
-        captureInteractiveArea { firstImage in
-            guard let first = firstImage else {
-                completion(nil)
-                return
+    // MARK: - 7. Scrolling Capture (VisionStitcher + PixelStrip Engine)
+    public func captureScrollingArea(reverseDirection: Bool = false, maxSteps: Int = 18, completion: @escaping (NSImage?) -> Void) {
+        // Ensure Accessibility and Automation permissions are present
+        if !PermissionManager.shared.checkAccessibility() {
+            let alert = NSAlert()
+            alert.messageText = "Accessibility Permission Required"
+            alert.informativeText = "Scrolling Capture needs Accessibility and Automation permissions so Screenshots can scroll through the window and capture full content.\n\nClick 'Grant Permission' to open System Settings."
+            alert.addButton(withTitle: "Grant Permission")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                PermissionManager.shared.requestAccessibility()
+                PermissionManager.shared.requestAutomation()
             }
-            guard let rect = self.lastCapturedAreaRect else {
-                completion(first)
+            completion(nil)
+            return
+        }
+
+        captureInteractiveArea { firstImage in
+            guard let first = firstImage, let rect = self.lastCapturedAreaRect else {
+                completion(firstImage)
                 return
             }
 
             var frames: [NSImage] = [first]
-            let group = DispatchGroup()
             let scrollCenter = CGPoint(x: rect.midX, y: rect.midY)
+            let delta: Int32 = reverseDirection ? 6 : -6
+            var consecutiveZeroShifts = 0
 
-            for stepIndex in 1..<steps {
-                group.enter()
-                DispatchQueue.main.asyncAfter(deadline: .now() + Double(stepIndex) * 0.50) {
-                    self.postScrollEvent(lines: reverseDirection ? 8 : -8, at: scrollCenter)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-                        self.captureRepeatArea { nextImg in
-                            if let nextImg = nextImg {
-                                frames.append(nextImg)
-                            }
-                            group.leave()
+            // Step loop: warp cursor -> scroll -> wait -> capture -> measure shift -> terminate or continue
+            func performStep(index: Int) {
+                if index >= maxSteps || consecutiveZeroShifts >= 2 {
+                    DispatchQueue.main.async {
+                        let stitched = self.stitchVisionFrames(frames, reverse: reverseDirection)
+                        completion(stitched ?? first)
+                    }
+                    return
+                }
+
+                // 1. Physically position the hardware cursor inside the capture area
+                CGWarpMouseCursorPosition(scrollCenter)
+
+                // 2. Post scroll wheel events (line + pixel)
+                self.postScrollEvent(lines: delta, at: scrollCenter)
+
+                // 3. Fallback: If previous shift was 0, trigger keyboard scroll via System Events
+                if consecutiveZeroShifts > 0 {
+                    self.postKeyboardScroll(reverse: reverseDirection)
+                }
+
+                // 4. Give the target window 350ms to finish scrolling and paint content
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    self.captureRegionDirect(rect: rect) { nextImg in
+                        guard let nextImg = nextImg else {
+                            performStep(index: index + 1)
+                            return
                         }
+
+                        // Measure shift between current last frame and newly captured frame
+                        if let lastFrame = frames.last,
+                           let shift = self.calculateShiftBetween(f1: lastFrame, f2: nextImg) {
+                            if shift > 3 {
+                                frames.append(nextImg)
+                                consecutiveZeroShifts = 0
+                            } else {
+                                consecutiveZeroShifts += 1
+                            }
+                        } else {
+                            consecutiveZeroShifts += 1
+                        }
+
+                        performStep(index: index + 1)
                     }
                 }
             }
 
-            group.notify(queue: .main) {
-                let stitched = self.stitchVisionFrames(frames, reverse: reverseDirection)
-                completion(stitched ?? first)
-            }
+            performStep(index: 1)
         }
     }
 
     private func postScrollEvent(lines: Int32, at point: CGPoint? = nil) {
         let targetPoint = point ?? lastCapturedAreaRect.map { CGPoint(x: $0.midX, y: $0.midY) } ?? .zero
-        if let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) {
-            scrollEvent.location = targetPoint
-            scrollEvent.post(tap: .cghidEventTap)
+
+        // Post line wheel event
+        if let lineEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) {
+            lineEvent.location = targetPoint
+            lineEvent.post(tap: .cghidEventTap)
+        }
+
+        // Post continuous pixel wheel event for WebKit / Chrome / Electron smooth scrolling
+        if let pixelEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: lines * 22, wheel2: 0, wheel3: 0) {
+            pixelEvent.location = targetPoint
+            pixelEvent.post(tap: .cghidEventTap)
         }
     }
 
-    // Vision-based translational image alignment (Shottr VisionStitcher engine)
+    private func postKeyboardScroll(reverse: Bool) {
+        // Key code 125 = Down Arrow, Key code 126 = Up Arrow
+        let keyCode = reverse ? 126 : 125
+        let script = NSAppleScript(source: "tell application \"System Events\" to key code \(keyCode)")
+        var err: NSDictionary?
+        script?.executeAndReturnError(&err)
+    }
+
+    // Measure vertical shift between two frames using Apple Vision + Pixel Strip matching fallback
+    private func calculateShiftBetween(f1: NSImage, f2: NSImage) -> Int? {
+        guard let t1 = f1.tiffRepresentation, let ci1 = CIImage(data: t1),
+              let t2 = f2.tiffRepresentation, let ci2 = CIImage(data: t2) else { return nil }
+
+        // Method 1: Apple Vision translational registration
+        let req = VNTranslationalImageRegistrationRequest(targetedCIImage: ci2)
+        let handler = VNImageRequestHandler(ciImage: ci1, options: [:])
+        if (try? handler.perform([req])) != nil,
+           let obs = req.results?.first as? VNImageTranslationAlignmentObservation {
+            let shiftY = Int(round(abs(obs.alignmentTransform.ty)))
+            let frameH = Int(ci1.extent.height)
+            if shiftY > 5 && shiftY < Int(Double(frameH) * 0.95) {
+                return shiftY
+            }
+        }
+
+        // Method 2: Raw pixel strip template search fallback (Shottr overlayShiftStamp)
+        guard let r1 = NSBitmapImageRep(data: t1), let r2 = NSBitmapImageRep(data: t2) else { return nil }
+        return findPixelStripShift(prev: r1, next: r2)
+    }
+
+    // Fast pixel strip template matching
+    private func findPixelStripShift(prev: NSBitmapImageRep, next: NSBitmapImageRep) -> Int? {
+        let w = prev.pixelsWide
+        let h = prev.pixelsHigh
+        guard next.pixelsWide == w && next.pixelsHigh == h && h > 100 else { return nil }
+
+        guard let p1 = prev.bitmapData, let p2 = next.bitmapData else { return nil }
+        let rowBytes = prev.bytesPerRow
+
+        let sampleH = 20
+        let sampleStartPrev = max(10, h - 100)
+        var bestShift: Int? = nil
+        var minDiff = Int.max
+
+        for candidateY in stride(from: 0, to: sampleStartPrev, by: 2) {
+            var diff = 0
+            let xStep = max(1, w / 16)
+            for r in 0..<sampleH {
+                let row1 = (sampleStartPrev + r) * rowBytes
+                let row2 = (candidateY + r) * rowBytes
+                for col in stride(from: 0, to: w, by: xStep) {
+                    let off1 = row1 + col * 4
+                    let off2 = row2 + col * 4
+                    let dr = Int(p1[off1]) - Int(p2[off2])
+                    let dg = Int(p1[off1 + 1]) - Int(p2[off2 + 1])
+                    let db = Int(p1[off1 + 2]) - Int(p2[off2 + 2])
+                    diff += abs(dr) + abs(dg) + abs(db)
+                }
+            }
+            if diff < minDiff {
+                minDiff = diff
+                bestShift = sampleStartPrev - candidateY
+            }
+        }
+
+        let totalSamples = sampleH * 16
+        if let shift = bestShift, (minDiff / max(1, totalSamples)) < 28, shift > 4 {
+            return shift
+        }
+        return nil
+    }
+
+    // Vision-based translational image alignment & raw stitch
     private func stitchVisionFrames(_ frames: [NSImage], reverse: Bool = false) -> NSImage? {
         guard !frames.isEmpty else { return nil }
         guard frames.count > 1 else { return frames.first }
@@ -212,29 +365,18 @@ public class ScreenCaptureManager {
         let frameH = reps[0].pixelsHigh
         let rowBytes = w * 4
 
-        var shifts: [Int] = []
+        var pairs: [(shift: Int, rep: NSBitmapImageRep)] = []
 
         for i in 1..<frames.count {
-            guard let tiff1 = frames[i - 1].tiffRepresentation, let ci1 = CIImage(data: tiff1),
-                  let tiff2 = frames[i].tiffRepresentation, let ci2 = CIImage(data: tiff2) else { continue }
-
-            let req = VNTranslationalImageRegistrationRequest(targetedCIImage: ci2)
-            let handler = VNImageRequestHandler(ciImage: ci1, options: [:])
-            do {
-                try handler.perform([req])
-                guard let obs = req.results?.first as? VNImageTranslationAlignmentObservation else { continue }
-                let shiftY = Int(round(abs(obs.alignmentTransform.ty)))
-                if shiftY > 5 && shiftY < Int(Double(frameH) * 0.95) {
-                    shifts.append(shiftY)
-                }
-            } catch {
-                NSLog("VisionStitcher registration error: \(error)")
+            if let shift = calculateShiftBetween(f1: frames[i - 1], f2: frames[i]),
+               shift > 4 && shift < Int(Double(frameH) * 0.95) {
+                pairs.append((shift: shift, rep: reps[i]))
             }
         }
 
-        guard !shifts.isEmpty else { return frames.first }
+        guard !pairs.isEmpty else { return frames.first }
 
-        let totalH = frameH + shifts.reduce(0, +)
+        let totalH = frameH + pairs.reduce(0) { $0 + $1.shift }
 
         guard let outRep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
@@ -249,22 +391,19 @@ public class ScreenCaptureManager {
             bitsPerPixel: 32
         ), let dstPtr = outRep.bitmapData else { return nil }
 
-        // Copy top initial frame
+        // Copy initial frame
         if let src0 = reps[0].bitmapData {
             memcpy(dstPtr, src0, frameH * rowBytes)
         }
 
         // Seamlessly stitch newly revealed rows
         var currentOffsetRows = frameH
-        for i in 0..<shifts.count {
-            let shift = shifts[i]
-            let nextRep = reps[i + 1]
-            guard let nextSrc = nextRep.bitmapData else { continue }
-
-            let srcOffset = (frameH - shift) * rowBytes
+        for pair in pairs {
+            guard let nextSrc = pair.rep.bitmapData else { continue }
+            let srcOffset = (frameH - pair.shift) * rowBytes
             let dstOffset = currentOffsetRows * rowBytes
-            memcpy(dstPtr + dstOffset, nextSrc + srcOffset, shift * rowBytes)
-            currentOffsetRows += shift
+            memcpy(dstPtr + dstOffset, nextSrc + srcOffset, pair.shift * rowBytes)
+            currentOffsetRows += pair.shift
         }
 
         let result = NSImage(size: NSSize(

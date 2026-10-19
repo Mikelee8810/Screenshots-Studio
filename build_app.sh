@@ -14,9 +14,15 @@ mkdir -p "${BUNDLE_DIR}/Contents/Resources"
 
 cp -f ".build/release/${APP_NAME}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
 
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-"${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" --export-iconset "${ICONSET}" || true
-iconutil -c icns "${ICONSET}" -o "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" || true
+if [ ! -f "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" ]; then
+    codesign --force --sign - "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
+    ICONSET="$(mktemp -d)/AppIcon.iconset"
+    "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" --export-iconset "${ICONSET}" 2>/dev/null || true
+    if [ -d "${ICONSET}" ]; then
+        iconutil -c icns "${ICONSET}" -o "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" 2>/dev/null || true
+        rm -rf "${ICONSET}" 2>/dev/null || true
+    fi
+fi
 
 cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,8 +47,14 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
     <string>220</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Screenshots needs Screen Recording access to capture and record your screen.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Screenshots needs Automation permissions to automatically scroll web pages, documents, and other applications during scrolling captures.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Screenshots needs Accessibility permissions to scroll pages and listen for global shortcuts.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

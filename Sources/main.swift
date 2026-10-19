@@ -18,8 +18,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupNotificationObservers()
         setupGlobalHotkeys()
         setupGlobalURLHandler()
-        // Shottr parity: Menu bar app stays in background; editor opens upon capture or user request.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { PermissionManager.promptIfNeeded() }
+        // Shottr parity: Menu bar app stays in background; prompt/register all permissions (Screen Recording, Accessibility, Automation).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            PermissionManager.shared.requestAllPermissions()
+        }
     }
 
     func setupNotificationObservers() {
@@ -260,6 +262,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         prefsItem.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)
         menu.addItem(prefsItem)
 
+        let permsItem = NSMenuItem(title: "Permissions & Automation...", action: #selector(showPermissionsAction), keyEquivalent: "")
+        permsItem.image = NSImage(systemSymbolName: "hand.raised.fill", accessibilityDescription: nil)
+        menu.addItem(permsItem)
+
         menu.addItem(NSMenuItem(title: "Quit Screenshots", action: #selector(quitAction), keyEquivalent: "q"))
 
         applyShortcutsToMenu(menu)
@@ -402,18 +408,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let img = img else { return }
                 let removeBreaks = UserDefaults.standard.bool(forKey: "ocrRemoveBreaks")
                 ScreenCaptureManager.shared.recognizeTextAndQR(in: img, removeLineBreaks: removeBreaks) { text in
-                    guard !text.isEmpty else { return }
                     let pb = NSPasteboard.general
                     pb.clearContents()
-                    pb.setString(text, forType: .string)
 
                     let alert = NSAlert()
-                    alert.messageText = "Text & QR Copied to Clipboard"
-                    alert.informativeText = text
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        alert.messageText = "No Text or QR Found"
+                        alert.informativeText = "Screenshots could not detect readable text or a QR code in the selected area."
+                    } else {
+                        pb.setString(text, forType: .string)
+                        alert.messageText = "Text & QR Copied to Clipboard"
+                        alert.informativeText = text
+                    }
                     alert.runModal()
                 }
             }
         }
+    }
+
+    @objc func showPermissionsAction() {
+        showPreferencesAction()
+        PermissionManager.shared.requestAllPermissions()
     }
 
     @objc func loadClipboardAction() {

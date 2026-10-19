@@ -4,25 +4,7 @@ import ScreenCaptureKit
 import ImageIO
 import UniformTypeIdentifiers
 
-// MARK: - Screen Recording permission helper
-
-enum PermissionManager {
-    /// Shows a one-time explainer if Screen Recording access hasn't been granted yet.
-    static func promptIfNeeded() {
-        guard !CGPreflightScreenCaptureAccess() else { return }
-        let alert = NSAlert()
-        alert.messageText = "Screen Recording permission needed"
-        alert.informativeText = "Screenshots needs Screen Recording access to capture your screen. Click Open Settings, switch Screenshots on, then relaunch the app."
-        alert.addButton(withTitle: "Open Settings")
-        alert.addButton(withTitle: "Later")
-        if alert.runModal() == .alertFirstButtonReturn {
-            CGRequestScreenCaptureAccess()
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-}
+// MARK: - Screen Recorder (ScreenCaptureKit -> H.264 MP4, plus GIF export)
 
 // MARK: - Screen Recorder (ScreenCaptureKit -> H.264 MP4, plus GIF export)
 

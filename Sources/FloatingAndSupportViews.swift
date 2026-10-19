@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ServiceManagement
+import Combine
 
 // MARK: - 1. Pin Window Controller (Floating Borderless Reference Card with X-Ray & Custom HUD)
 
@@ -481,6 +482,7 @@ class PreferencesState: ObservableObject {
 public struct PreferencesView: View {
     @StateObject private var state = PreferencesState()
     @ObservedObject private var theme = ThemeManager.shared
+    @ObservedObject private var perms = PermissionManager.shared
 
     public init() {}
 
@@ -491,7 +493,8 @@ public struct PreferencesView: View {
                     (0, "General & Theme", "slider.horizontal.3"),
                     (1, "Shortcuts", "command"),
                     (2, "Storage", "externaldrive"),
-                    (3, "Advanced", "cpu")
+                    (3, "Advanced", "cpu"),
+                    (4, "Permissions", "hand.raised.fill")
                 ], id: \.0) { idx, title, icon in
                     StudioActionPill(title: title, systemIcon: icon, isPrimary: state.selectedTab == idx) {
                         state.selectedTab = idx
@@ -566,7 +569,7 @@ public struct PreferencesView: View {
                                 }
                             }
                         }
-                    } else {
+                    } else if state.selectedTab == 3 {
                         prefsCard(title: "OCR, RETINA & COLOR SETTINGS") {
                             Toggle("Strip line breaks when copying OCR text", isOn: $state.ocrRemoveBreaks)
                             Toggle("Include macOS drop shadow in Window Captures", isOn: $state.windowShadow)
@@ -599,6 +602,89 @@ public struct PreferencesView: View {
                                 MiniSnakeGameView()
                                     .frame(height: 150)
                                     .cornerRadius(8)
+                            }
+                        }
+                    } else {
+                        // MARK: - Tab 4: Permissions & Automation
+                        prefsCard(title: "MACOS CONTROL & AUTOMATION PERMISSIONS") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("macOS requires explicit permissions for Screenshots to scroll web pages, documents, and other applications during Scrolling Capture, and to record screen content.")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(StudioTheme.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                HStack {
+                                    StudioActionPill(title: "Auto-Request All Permissions", systemIcon: "bolt.shield.fill", isPrimary: true) {
+                                        perms.requestAllPermissions()
+                                    }
+                                    StudioActionPill(title: "Check Status", systemIcon: "arrow.clockwise") {
+                                        perms.refresh()
+                                    }
+                                }
+                                .padding(.top, 4)
+                            }
+                        }
+
+                        prefsCard(title: "1. AUTOMATION (SYSTEM SETTINGS > PRIVACY & SECURITY > AUTOMATION)") {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: perms.hasAutomation ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                            .foregroundColor(perms.hasAutomation ? Color(red: 0.2, green: 0.82, blue: 0.44) : Color.orange)
+                                        Text(perms.hasAutomation ? "Automation Granted" : "Automation Not Enabled")
+                                            .font(.system(size: 12.5, weight: .bold))
+                                            .foregroundColor(StudioTheme.textPrimary)
+                                    }
+                                    Text("Controls System Events to perform keyboard & window scrolling in web browsers and native apps.")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(StudioTheme.textSecondary)
+                                }
+                                Spacer()
+                                StudioActionPill(title: perms.hasAutomation ? "Open Settings" : "Enable Automation", systemIcon: "gearshape") {
+                                    perms.requestAutomation()
+                                }
+                            }
+                        }
+
+                        prefsCard(title: "2. ACCESSIBILITY (SYSTEM SETTINGS > PRIVACY & SECURITY > ACCESSIBILITY)") {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: perms.hasAccessibility ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                            .foregroundColor(perms.hasAccessibility ? Color(red: 0.2, green: 0.82, blue: 0.44) : Color.orange)
+                                        Text(perms.hasAccessibility ? "Accessibility Granted" : "Accessibility Not Enabled")
+                                            .font(.system(size: 12.5, weight: .bold))
+                                            .foregroundColor(StudioTheme.textPrimary)
+                                    }
+                                    Text("Sends synthetic scroll events and listens for global hotkey combinations.")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(StudioTheme.textSecondary)
+                                }
+                                Spacer()
+                                StudioActionPill(title: perms.hasAccessibility ? "Open Settings" : "Enable Accessibility", systemIcon: "hand.raised") {
+                                    perms.requestAccessibility()
+                                }
+                            }
+                        }
+
+                        prefsCard(title: "3. SCREEN RECORDING (SYSTEM SETTINGS > PRIVACY & SECURITY > SCREEN RECORDING)") {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: perms.hasScreenRecording ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                            .foregroundColor(perms.hasScreenRecording ? Color(red: 0.2, green: 0.82, blue: 0.44) : Color.orange)
+                                        Text(perms.hasScreenRecording ? "Screen Recording Granted" : "Screen Recording Not Enabled")
+                                            .font(.system(size: 12.5, weight: .bold))
+                                            .foregroundColor(StudioTheme.textPrimary)
+                                    }
+                                    Text("Captures screenshots and records video using Apple ScreenCaptureKit.")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(StudioTheme.textSecondary)
+                                }
+                                Spacer()
+                                StudioActionPill(title: perms.hasScreenRecording ? "Open Settings" : "Enable Recording", systemIcon: "display") {
+                                    perms.requestScreenRecording()
+                                }
                             }
                         }
                     }
