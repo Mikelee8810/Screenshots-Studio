@@ -192,7 +192,7 @@ public struct EditorView: View {
         }
         .background(StudioTheme.bgCanvas)
         .preferredColorScheme(theme.colorScheme)
-        .frame(minWidth: 1080, minHeight: 700)
+        .frame(minWidth: 640, minHeight: 420)
         .background(
             KeyboardEventMonitorView { event in
                 handleKeyDown(event)
@@ -1167,15 +1167,21 @@ public struct EditorView: View {
             return false
         }
 
-        // Escape: reset selection if active, else copy and close
+        // Escape: reset selection if active, else copy and close (Shottr behavior)
         if event.keyCode == 53 {
             if state.selectionRect != nil {
                 resetSelection()
                 return true
             } else {
-                copyToClipboard()
+                copyToClipboard(closeAfter: true)
                 return true
             }
+        }
+
+        // Return / Enter (36 / 76): Save image and close editor (Shottr behavior)
+        if event.keyCode == 36 || event.keyCode == 76 {
+            saveToDefaultFolder(closeAfter: true)
+            return true
         }
 
         // Delete / Backspace: erase selection if active, else delete selected annotation
@@ -1346,15 +1352,20 @@ public struct EditorView: View {
         state.showToast("Pinned floating window")
     }
 
-    private func copyToClipboard() {
+    private func copyToClipboard(closeAfter: Bool = true) {
         guard let finalImg = renderFlattenedImage() else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([finalImg])
         state.showToast("Copied rendered image to clipboard")
+        if closeAfter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(name: Notification.Name("ScreenshotsCloseEditor"), object: nil)
+            }
+        }
     }
 
-    private func saveToDefaultFolder() {
+    private func saveToDefaultFolder(closeAfter: Bool = true) {
         guard let finalImg = renderFlattenedImage(),
               let tiff = finalImg.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
@@ -1367,6 +1378,11 @@ public struct EditorView: View {
         let fileURL = folder.appendingPathComponent(filename)
         try? png.write(to: fileURL)
         state.showToast("Saved \(filename)")
+        if closeAfter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(name: Notification.Name("ScreenshotsCloseEditor"), object: nil)
+            }
+        }
     }
 
     private func loadFromClipboard() {

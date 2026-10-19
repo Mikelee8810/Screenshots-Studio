@@ -18,12 +18,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupNotificationObservers()
         setupGlobalHotkeys()
         setupGlobalURLHandler()
-        openEditor(with: nil)
+        // Shottr parity: Menu bar app stays in background; editor opens upon capture or user request.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { PermissionManager.promptIfNeeded() }
     }
 
     func setupNotificationObservers() {
         let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(closeEditorAction), name: Notification.Name("ScreenshotsCloseEditor"), object: nil)
         nc.addObserver(self, selector: #selector(showLibraryAction), name: Notification.Name("ScreenshotsOpenLibrary"), object: nil)
         nc.addObserver(self, selector: #selector(showPreferencesAction), name: Notification.Name("ScreenshotsOpenPreferences"), object: nil)
         nc.addObserver(self, selector: #selector(captureAreaAction), name: Notification.Name("ScreenshotsTriggerArea"), object: nil)
@@ -431,26 +432,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Studio Window Controllers (Defaults to Standard .normal Window Level)
+    @objc func closeEditorAction() {
+        DispatchQueue.main.async { [weak self] in
+            self?.editorWindow?.orderOut(nil)
+        }
+    }
+
+    // MARK: - Studio Window Controllers (Defaults to Standard .normal Window Level, Shottr Auto-Fit)
     func openEditor(with image: NSImage?) {
         if let image = image {
             self.capturedImage = image
         }
 
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        // Calculate natural size matching Shottr (1:1 image points + toolbar height, clamped to visible screen)
+        let headerHeight: CGFloat = 72
+        var targetWidth: CGFloat = 1100
+        var targetHeight: CGFloat = 720
+
+        if let img = self.capturedImage {
+            let imgW = img.size.width
+            let imgH = img.size.height
+            // Add padding for canvas margin
+            targetWidth = max(780, min(visibleFrame.width - 60, imgW + 80))
+            targetHeight = max(520, min(visibleFrame.height - 60, imgH + headerHeight + 60))
+        }
+
+        let originX = visibleFrame.origin.x + max(0, (visibleFrame.width - targetWidth) / 2)
+        let originY = visibleFrame.origin.y + max(0, (visibleFrame.height - targetHeight) / 2)
+        let windowRect = NSRect(x: originX, y: originY, width: targetWidth, height: targetHeight)
+
         if editorWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 1200, height: 780),
+                contentRect: windowRect,
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
-            window.center()
             window.title = "Screenshots Studio"
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = false
             window.isReleasedWhenClosed = false
             self.editorWindow = window
+        } else {
+            editorWindow?.setFrame(windowRect, display: true, animate: false)
         }
 
         // Default to FALSE (.normal) so user can place window behind any other app!
