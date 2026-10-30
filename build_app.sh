@@ -55,6 +55,36 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
     <string>Screenshots needs Automation permissions to automatically scroll web pages, documents, and other applications during scrolling captures.</string>
     <key>NSAccessibilityUsageDescription</key>
     <string>Screenshots needs Accessibility permissions to scroll pages and listen for global shortcuts.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+                <string>public.png</string>
+                <string>public.jpeg</string>
+                <string>com.compuserve.gif</string>
+                <string>public.tiff</string>
+            </array>
+        </dict>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Screenshots URL</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>screenshots</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

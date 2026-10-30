@@ -22,6 +22,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             PermissionManager.shared.requestAllPermissions()
         }
+
+        let args = Array(CommandLine.arguments.dropFirst())
+        for arg in args {
+            if !arg.hasPrefix("-") && FileManager.default.fileExists(atPath: arg) {
+                if let img = NSImage(contentsOfFile: arg) {
+                    openEditor(with: img)
+                    break
+                }
+            }
+        }
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        if let img = NSImage(contentsOfFile: filename) {
+            openEditor(with: img)
+            return true
+        }
+        return false
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if let first = filenames.first, let img = NSImage(contentsOfFile: first) {
+            openEditor(with: img)
+        }
     }
 
     func setupNotificationObservers() {
@@ -297,33 +321,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? png.write(to: url)
         }
 
-        ThumbnailPreviewManager.shared.showThumbnail(
-            for: image,
-            onEdit: { [weak self] img in
-                self?.openEditor(with: img)
-            },
-            onPin: { [weak self] img in
-                PinWindowManager.shared.pinImage(img) { edited in
-                    self?.openEditor(with: edited)
-                }
-            },
-            onOCR: { img in
-                ScreenCaptureManager.shared.recognizeTextAndQR(in: img) { text in
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(text, forType: .string)
-                }
-            },
-            onSave: { img in
-                guard let tiff = img.tiffRepresentation,
-                      let bmp = NSBitmapImageRep(data: tiff),
-                      let png = bmp.representation(using: .png, properties: [:]) else { return }
-                let folder = ScreenCaptureManager.shared.defaultSaveFolder
-                let url = folder.appendingPathComponent("SCR-\(Int(Date().timeIntervalSince1970)).png")
-                try? png.write(to: url)
-            }
-        )
-
+        // Shottr parity: Immediately open the clean single-row editor window without extra corner thumbnails
         if UserDefaults.standard.object(forKey: "afterGrabShow") == nil || UserDefaults.standard.bool(forKey: "afterGrabShow") {
             openEditor(with: image)
         }
@@ -463,7 +461,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         // Calculate natural size matching Shottr (1:1 image points + toolbar height, clamped to visible screen)
-        let headerHeight: CGFloat = 72
+        let headerHeight: CGFloat = 44
         var targetWidth: CGFloat = 1100
         var targetHeight: CGFloat = 720
 
@@ -471,8 +469,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let imgW = img.size.width
             let imgH = img.size.height
             // Add padding for canvas margin
-            targetWidth = max(780, min(visibleFrame.width - 60, imgW + 80))
-            targetHeight = max(520, min(visibleFrame.height - 60, imgH + headerHeight + 60))
+            targetWidth = max(780, min(visibleFrame.width - 60, imgW + 60))
+            targetHeight = max(480, min(visibleFrame.height - 60, imgH + headerHeight + 40))
         }
 
         let originX = visibleFrame.origin.x + max(0, (visibleFrame.width - targetWidth) / 2)
@@ -578,6 +576,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             captureOCRAction()
         case "load":
             if url.path.contains("clipboard") { loadClipboardAction() }
+        case "open":
+            if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let pathItem = components.queryItems?.first(where: { $0.name == "path" })?.value,
+               let img = NSImage(contentsOfFile: pathItem) {
+                openEditor(with: img)
+            } else {
+                showEditorAction()
+            }
         default:
             showEditorAction()
         }
