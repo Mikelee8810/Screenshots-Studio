@@ -2,26 +2,24 @@
 set -euo pipefail
 
 APP_NAME="Screenshots"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUNDLE_DIR="$HOME/Applications/${APP_NAME}.app"
 SYS_BUNDLE_DIR="/Applications/${APP_NAME}.app"
+BUNDLE_ID="com.screenshots.studio"
 
 echo "🔨 Building ${APP_NAME} (Release)..."
+cd "$ROOT"
 swift build -c release
 
 echo "📦 Packaging ${BUNDLE_DIR}..."
+rm -rf "${BUNDLE_DIR}"
 mkdir -p "${BUNDLE_DIR}/Contents/MacOS"
 mkdir -p "${BUNDLE_DIR}/Contents/Resources"
 
 cp -f ".build/release/${APP_NAME}" "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}"
 
-if [ ! -f "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" ]; then
-    codesign --force --sign - "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
-    ICONSET="$(mktemp -d)/AppIcon.iconset"
-    "${BUNDLE_DIR}/Contents/MacOS/${APP_NAME}" --export-iconset "${ICONSET}" 2>/dev/null || true
-    if [ -d "${ICONSET}" ]; then
-        iconutil -c icns "${ICONSET}" -o "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns" 2>/dev/null || true
-        rm -rf "${ICONSET}" 2>/dev/null || true
-    fi
+if [ -f "$ROOT/AppIcon.icns" ]; then
+    cp -f "$ROOT/AppIcon.icns" "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns"
 fi
 
 cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
@@ -32,29 +30,27 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.screenshots.studio</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
-    <string>Screenshots Studio</string>
+    <string>${APP_NAME}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.2.0</string>
+    <string>2.3.0</string>
     <key>CFBundleVersion</key>
-    <string>220</string>
+    <string>230</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Screenshots needs Screen Recording access to capture and record your screen.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Screenshots needs Automation permissions to automatically scroll web pages, documents, and other applications during scrolling captures.</string>
-    <key>NSAccessibilityUsageDescription</key>
-    <string>Screenshots needs Accessibility permissions to scroll pages and listen for global shortcuts.</string>
+    <string>Screenshots needs Screen Recording access to capture your screen.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -69,36 +65,24 @@ cat > "${BUNDLE_DIR}/Contents/Info.plist" <<EOF
                 <string>public.image</string>
                 <string>public.png</string>
                 <string>public.jpeg</string>
-                <string>com.compuserve.gif</string>
                 <string>public.tiff</string>
             </array>
         </dict>
     </array>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>Screenshots URL</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>screenshots</string>
-            </array>
-        </dict>
-    </array>
-    <key>NSHighResolutionCapable</key>
-    <true/>
 </dict>
 </plist>
 EOF
 
-codesign --force --deep --sign - "${BUNDLE_DIR}"
+printf 'APPL????' > "${BUNDLE_DIR}/Contents/PkgInfo"
+
+echo "🔏 Signing with stable designated requirement (no cdhash invalidation)..."
+codesign --force --deep -s - -i "${BUNDLE_ID}" --requirement "=designated => identifier \"${BUNDLE_ID}\"" "${BUNDLE_DIR}"
 
 if [ -w "/Applications" ]; then
-    rm -rf "${SYS_BUNDLE_DIR}" 2>/dev/null || true
-    cp -R "${BUNDLE_DIR}" "${SYS_BUNDLE_DIR}" 2>/dev/null || true
+    echo "📲 Installing to ${SYS_BUNDLE_DIR}..."
+    rm -rf "${SYS_BUNDLE_DIR}"
+    cp -R "${BUNDLE_DIR}" "${SYS_BUNDLE_DIR}"
+    codesign --force --deep -s - -i "${BUNDLE_ID}" --requirement "=designated => identifier \"${BUNDLE_ID}\"" "${SYS_BUNDLE_DIR}"
 fi
 
-echo "✅ Installed to ${BUNDLE_DIR}"
-echo "🚀 Launching ${APP_NAME}..."
-killall "${APP_NAME}" 2>/dev/null || true
-open "${BUNDLE_DIR}"
+echo "✅ Installed cleanly to ${SYS_BUNDLE_DIR}"

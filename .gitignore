@@ -7,3 +7,4 @@ DerivedData/
 *.xcodeproj
 *.xcworkspace
 *.app
+build/
